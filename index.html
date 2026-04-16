@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RA-Pilot - Dashboard SBOM</title>
+    <style>
+        /* --- VARIABLES & THÈME DE BASE --- */
+        :root {
+            --bg-body: #0d1117;
+            --bg-panel: #161b22;
+            --border: #30363d;
+            --text-main: #c9d1d9;
+            --text-muted: #8b949e;
+            --primary: #58a6ff;
+            --danger: #f85149;
+            --warning: #f0883e;
+            --success: #2ea043;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* --- LAYOUT PRINCIPAL --- */
+        .sidebar {
+            width: 320px;
+            background-color: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header-kpi {
+            padding: 20px 30px;
+            background-color: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 20px;
+        }
+
+        .table-container {
+            flex: 1;
+            padding: 20px 30px;
+            overflow-y: auto;
+        }
+
+        /* --- COMPOSANTS UI --- */
+        .card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 15px;
+        }
+
+        .kpi-box {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 15px 20px;
+            text-align: center;
+        }
+
+        .kpi-value {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-top: 5px;
+            color: white;
+        }
+
+        input, select, button {
+            font-family: inherit;
+            box-sizing: border-box;
+        }
+
+        input[type="text"], select {
+            width: 100%;
+            padding: 10px;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            outline: none;
+        }
+
+        input[type="text"]:focus, select:focus {
+            border-color: var(--primary);
+        }
+
+        .btn-primary {
+            width: 100%;
+            padding: 10px;
+            background-color: var(--primary);
+            color: var(--bg-body);
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .btn-primary:hover { opacity: 0.9; }
+
+        .btn-danger {
+            width: 100%;
+            padding: 10px;
+            background-color: transparent;
+            color: var(--danger);
+            border: 1px solid var(--danger);
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: 6px;
+            padding: 30px 20px;
+            text-align: center;
+            color: var(--text-muted);
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.01);
+            transition: all 0.2s;
+        }
+
+        .drop-zone:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: rgba(88, 166, 255, 0.05);
+        }
+
+        /* --- TABLEAU --- */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        thead {
+            background-color: rgba(255, 255, 255, 0.02);
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        th, td {
+            padding: 12px 15px;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+        }
+
+        .row-parent { background-color: rgba(255, 255, 255, 0.02); cursor: pointer; }
+        .row-parent:hover { background-color: rgba(255, 255, 255, 0.04); }
+        
+        /* Tiroir enfants masqué par défaut */
+        .row-child { display: none; background-color: transparent; }
+        .row-child.is-expanded { display: table-row; }
+
+        .toggle-icon {
+            display: inline-block;
+            width: 15px;
+            color: var(--primary);
+            font-size: 0.8rem;
+        }
+
+        /* --- BADGES (Identiques au JS) --- */
+        .cat-badge { padding: 3px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: 600; border: 1px solid; }
+        .cat-infra { color: #58a6ff; border-color: rgba(88, 166, 255, 0.3); background: rgba(88, 166, 255, 0.1); }
+        .cat-runtime { color: #bc8cff; border-color: rgba(188, 140, 255, 0.3); background: rgba(188, 140, 255, 0.1); }
+        .cat-applicatif { color: #3fb950; border-color: rgba(63, 185, 80, 0.3); background: rgba(63, 185, 80, 0.1); }
+
+        .badge-prio { padding: 3px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; color: white; }
+        .badge-p0 { background-color: var(--danger); }
+        .badge-p1 { background-color: var(--warning); }
+        .badge-p2 { background-color: #d29922; }
+        .badge-p3 { background-color: #8b949e; }
+        .badge-p4 { background-color: #484f58; }
+
+        /* --- MODALES & LOADER --- */
+        .modal {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); backdrop-filter: blur(4px); z-index: 9999;
+        }
+        .modal-content {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
+            padding: 25px; width: 600px; max-height: 80vh; display: flex; flex-direction: column;
+        }
+        
+        #loader-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); z-index: 10000; align-items: center; justify-content: center; flex-direction: column;
+        }
+        .spinner {
+            width: 50px; height: 50px; border: 4px solid rgba(88, 166, 255, 0.2);
+            border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div id="loader-overlay">
+        <div class="spinner"></div>
+        <h2 id="loader-title" style="color: white; margin-top: 20px;">Traitement...</h2>
+        <p id="loader-status" style="color: #8b949e;">Veuillez patienter</p>
+    </div>
+
+    <div class="sidebar">
+        <div>
+            <h2 style="margin: 0 0 15px 0; font-size: 1.2rem; color: white;">🛡️ RA-Pilot</h2>
+            
+            <label style="font-size: 0.8rem; color: var(--text-muted);">Application courante :</label>
+            <select id="currentAppSelector" onchange="switchDashboard()" style="margin-top: 5px; margin-bottom: 10px;"></select>
+            
+            <button class="btn-danger" onclick="delApp()" style="margin-top:0;">Supprimer l'application</button>
+        </div>
+
+        <div class="card">
+            <h3 style="margin: 0 0 10px 0; font-size: 0.9rem;">➕ Nouvelle Application</h3>
+            <div style="display: flex; gap: 5px;">
+                <input type="text" id="newAppName" placeholder="Ex: Backend API">
+                <button onclick="createApp()" style="background: var(--primary); border:none; color:var(--bg-body); font-weight:bold; border-radius:4px; padding:0 15px; cursor:pointer;">OK</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3 style="margin: 0 0 10px 0; font-size: 0.9rem;">📥 Importer SBOM</h3>
+            <div id="drop-zone" class="drop-zone">
+                📄 Cliquez pour sélectionner un fichier JSON (CycloneDX / SPDX)
+            </div>
+            <input type="file" id="fileInput" accept=".json" style="display: none;">
+        </div>
+
+        <div id="history-section" style="display: none; flex: 1; overflow-y: auto;">
+            <h3 style="margin: 0 0 10px 0; font-size: 0.9rem; border-bottom: 1px solid var(--border); padding-bottom: 5px;">📚 Historique des imports</h3>
+            <ul id="file-list" style="padding: 0; margin: 0;"></ul>
+        </div>
+    </div>
+
+    <div class="main-content">
+        
+        <div class="header-kpi">
+            <div class="kpi-box">
+                <div style="color: var(--text-muted); font-size: 0.8rem;">Composants analysés</div>
+                <div id="comp-count" class="kpi-value">0</div>
+            </div>
+            <div class="kpi-box">
+                <div style="color: var(--text-muted); font-size: 0.8rem;">Score de Santé</div>
+                <div id="health-gauge" class="kpi-value" style="color: var(--success);">100%</div>
+            </div>
+            <div class="kpi-box" style="border-color: rgba(248,81,73,0.3);">
+                <div style="color: var(--danger); font-size: 0.8rem; font-weight: bold;">CVE Détectées</div>
+                <div id="vulnerabilities-count" class="kpi-value" style="color: var(--danger);">0</div>
+            </div>
+            
+            <div class="kpi-box" style="flex: 1.5;">
+                <div style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 8px;">Répartition Risque EOL</div>
+                <div style="display: flex; gap: 8px; justify-content: center;">
+                    <div style="background: rgba(248,81,73,0.1); border: 1px solid var(--danger); padding: 4px 8px; border-radius: 6px; min-width: 40px;">
+                        <div style="font-size: 0.65rem; color: var(--danger); font-weight: bold;">P0</div>
+                        <div id="p0-count" style="font-size: 1.1rem; color: white; font-weight: bold;">0</div>
+                    </div>
+                    <div style="background: rgba(240,136,62,0.1); border: 1px solid var(--warning); padding: 4px 8px; border-radius: 6px; min-width: 40px;">
+                        <div style="font-size: 0.65rem; color: var(--warning); font-weight: bold;">P1</div>
+                        <div id="p1-count" style="font-size: 1.1rem; color: white; font-weight: bold;">0</div>
+                    </div>
+                    <div style="background: rgba(210,153,34,0.1); border: 1px solid #d29922; padding: 4px 8px; border-radius: 6px; min-width: 40px;">
+                        <div style="font-size: 0.65rem; color: #d29922; font-weight: bold;">P2</div>
+                        <div id="p2-count" style="font-size: 1.1rem; color: white; font-weight: bold;">0</div>
+                    </div>
+                    <div style="background: rgba(139,148,158,0.1); border: 1px solid #8b949e; padding: 4px 8px; border-radius: 6px; min-width: 40px;">
+                        <div style="font-size: 0.65rem; color: #8b949e; font-weight: bold;">P3</div>
+                        <div id="p3-count" style="font-size: 1.1rem; color: white; font-weight: bold;">0</div>
+                    </div>
+                    <div style="background: rgba(72,79,88,0.1); border: 1px solid #484f58; padding: 4px 8px; border-radius: 6px; min-width: 40px;">
+                        <div style="font-size: 0.65rem; color: #8b949e; font-weight: bold;">P4</div>
+                        <div id="p4-count" style="font-size: 1.1rem; color: white; font-weight: bold;">0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div style="padding: 15px 30px; background: var(--bg-body); display: flex; gap: 15px; align-items: center; border-bottom: 1px solid var(--border);">
+            <input type="text" id="globalSearch" placeholder="🔍 Rechercher un composant, une CVE..." style="max-width: 400px;" oninput="render()">
+            
+            <div id="refresh-section" style="display: none; margin-left: auto;">
+                <button onclick="refresh()" style="background: transparent; border: 1px solid var(--text-muted); color: var(--text-main); padding: 8px 15px; border-radius: 4px; cursor: pointer;">
+                    🔄 Rafraîchir les APIs (EOL & OSV)
+                </button>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        </tr>
+                </thead>
+                <tbody id="table-body">
+                    <tr><td colspan="8" style="text-align:center; padding: 40px; color: var(--text-muted);">Veuillez sélectionner ou créer une application.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="cve-modal" class="modal">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                <h2 id="cve-modal-title" style="margin: 0; font-size: 1.2rem;">Vulnérabilités</h2>
+                <button onclick="document.getElementById('cve-modal').style.display='none'" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.5rem;">&times;</button>
+            </div>
+            
+            <input type="text" id="modalCveSearch" placeholder="Filtrer les CVE..." style="margin-bottom: 15px;">
+            
+            <div id="cve-list-container" style="overflow-y: auto; flex: 1; padding-right: 5px;"></div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
