@@ -2,367 +2,175 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RA-Pilot - Dashboard SBOM</title>
-    <style>
-        /* --- VARIABLES & THÈME DE BASE --- */
-        :root {
-            --bg-body: #0d1117;
-            --bg-panel: #161b22;
-            --border: #30363d;
-            --text-main: #c9d1d9;
-            --text-muted: #8b949e;
-            --primary: #58a6ff;
-            --danger: #f85149;
-            --warning: #f0883e;
-            --success: #2ea043;
-        }
-
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: var(--bg-body);
-            color: var(--text-main);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            display: flex;
-            height: 100vh;
-            overflow: hidden;
-        }
-
-        .badge-cve {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 0.75rem;
-            font-weight: bold;
-            cursor: pointer; /* La petite main au survol */
-            margin-left: 8px;
-            transition: all 0.2s ease;
-            background: rgba(248, 81, 73, 0.15); 
-            color: #f85149; 
-            border: 1px solid rgba(248, 81, 73, 0.4);
-            user-select: none;
-        }
-
-        .badge-cve:hover {
-            background: #f85149;
-            color: white;
-            transform: scale(1.1);
-            box-shadow: 0 0 10px rgba(248, 81, 73, 0.5);
-        }
-
-        /* --- LAYOUT PRINCIPAL --- */
-        .sidebar {
-            width: 320px;
-            background-color: var(--bg-panel);
-            border-right: 1px solid var(--border);
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            overflow-y: auto;
-        }
-
-        .main-content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .header-kpi {
-            padding: 20px 30px;
-            background-color: var(--bg-panel);
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            gap: 20px;
-        }
-
-        .table-container {
-            flex: 1;
-            padding: 20px 30px;
-            overflow-y: auto;
-        }
-
-        /* --- COMPOSANTS UI --- */
-        .card {
-            background: rgba(255, 255, 255, 0.02);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 15px;
-        }
-
-        .kpi-box {
-            flex: 1;
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 15px 20px;
-            text-align: center;
-        }
-
-        .kpi-value {
-            font-size: 2rem;
-            font-weight: bold;
-            margin-top: 5px;
-            color: white;
-        }
-
-        input, select, button {
-            font-family: inherit;
-            box-sizing: border-box;
-        }
-
-        input[type="text"], select {
-            width: 100%;
-            padding: 10px;
-            background-color: var(--bg-body);
-            color: var(--text-main);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            outline: none;
-        }
-
-        input[type="text"]:focus, select:focus {
-            border-color: var(--primary);
-        }
-
-        .btn-primary {
-            width: 100%;
-            padding: 10px;
-            background-color: var(--primary);
-            color: var(--bg-body);
-            border: none;
-            border-radius: 4px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: opacity 0.2s;
-        }
-
-        .btn-primary:hover { opacity: 0.9; }
-
-        .btn-danger {
-            width: 100%;
-            padding: 10px;
-            background-color: transparent;
-            color: var(--danger);
-            border: 1px solid var(--danger);
-            border-radius: 4px;
-            cursor: pointer;
-            margin-top: 10px;
-        }
-
-        .drop-zone {
-            border: 2px dashed var(--border);
-            border-radius: 6px;
-            padding: 30px 20px;
-            text-align: center;
-            color: var(--text-muted);
-            cursor: pointer;
-            background: rgba(255, 255, 255, 0.01);
-            transition: all 0.2s;
-        }
-
-        .drop-zone:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-            background: rgba(88, 166, 255, 0.05);
-        }
-
-        /* --- TABLEAU --- */
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }
-
-        thead {
-            background-color: rgba(255, 255, 255, 0.02);
-            text-transform: uppercase;
-            font-size: 0.75rem;
-            color: var(--text-muted);
-        }
-
-        th, td {
-            padding: 12px 15px;
-            border-bottom: 1px solid var(--border);
-            text-align: left;
-        }
-
-        .row-parent { background-color: rgba(255, 255, 255, 0.02); cursor: pointer; }
-        .row-parent:hover { background-color: rgba(255, 255, 255, 0.04); }
-        
-        /* Tiroir enfants masqué par défaut */
-        .row-child { display: none; background-color: transparent; }
-        .row-child.is-expanded { display: table-row; }
-
-        .toggle-icon {
-            display: inline-block;
-            width: 15px;
-            color: var(--primary);
-            font-size: 0.8rem;
-        }
-
-        /* --- BADGES (Identiques au JS) --- */
-        .cat-badge { padding: 3px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: 600; border: 1px solid; }
-        .cat-infra { color: #58a6ff; border-color: rgba(88, 166, 255, 0.3); background: rgba(88, 166, 255, 0.1); }
-        .cat-runtime { color: #bc8cff; border-color: rgba(188, 140, 255, 0.3); background: rgba(188, 140, 255, 0.1); }
-        .cat-applicatif { color: #3fb950; border-color: rgba(63, 185, 80, 0.3); background: rgba(63, 185, 80, 0.1); }
-
-        .badge-prio { padding: 3px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; color: white; }
-        .badge-p0 { background-color: var(--danger); }
-        .badge-p1 { background-color: var(--warning); }
-        .badge-p2 { background-color: #d29922; }
-        .badge-p3 { background-color: #8b949e; }
-        .badge-p4 { background-color: #484f58; }
-
-        /* --- MODALES & LOADER --- */
-        .modal {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.85); backdrop-filter: blur(4px); z-index: 9999;
-        }
-        .modal-content {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
-            padding: 25px; width: 600px; max-height: 80vh; display: flex; flex-direction: column;
-        }
-        
-        #loader-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9); z-index: 10000; align-items: center; justify-content: center; flex-direction: column;
-        }
-        .spinner {
-            width: 50px; height: 50px; border: 4px solid rgba(88, 166, 255, 0.2);
-            border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-    </style>
+    <title>SBOM Control Tower - Édition Multi-Profils & Sync</title>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div id="titan-loader" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(13, 17, 23, 0.90); backdrop-filter: blur(6px); align-items: center; justify-content: center; z-index: 2147483647; margin: 0; padding: 0;">
-        <div style="background: #161b22; border: 1px solid #30363d; padding: 40px; border-radius: 12px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,1); max-width: 400px; width: 90%; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-            <div class="spinner"></div>
-            <h3 id="loader-title" style="margin: 0 0 10px 0; color: white;">Analyse en cours...</h3>
-            <p id="loader-desc" style="margin: 0; color: #8b949e; font-size: 0.9rem;">Veuillez patienter.</p>
-        </div>
-    </div>
-    <div id="loader-overlay">
+
+    <div id="loading">
         <div class="spinner"></div>
-        <h2 id="loader-title" style="color: white; margin-top: 20px;">Traitement...</h2>
-        <p id="loader-status" style="color: #8b949e;">Veuillez patienter</p>
+        <h2 id="loadMsg" style="margin-top:20px;">Analyse Cyber-Résilience...</h2>
+        <div class="progress-container"><div id="progressBar"></div></div>
     </div>
 
-    <div class="sidebar">
-        <div>
-            <h2 style="margin: 0 0 15px 0; font-size: 1.2rem; color: white;">🛡️ RA-Pilot</h2>
-            
-            <label style="font-size: 0.8rem; color: var(--text-muted);">Application courante :</label>
-            <select id="currentAppSelector" onchange="switchDashboard()" style="margin-top: 5px; margin-bottom: 10px;"></select>
-            
-            <button class="btn-danger" onclick="delApp()" style="margin-top:0;">Supprimer l'application</button>
-        </div>
-
-        <div class="card">
-            <h3 style="margin: 0 0 10px 0; font-size: 0.9rem;">➕ Nouvelle Application</h3>
-            <div style="display: flex; gap: 5px;">
-                <input type="text" id="newAppName" placeholder="Ex: Backend API">
-                <button onclick="createApp()" style="background: var(--primary); border:none; color:var(--bg-body); font-weight:bold; border-radius:4px; padding:0 15px; cursor:pointer;">OK</button>
+    <div id="profileModal" class="modal-overlay">
+        <div class="modal-content" style="width: 450px; height: auto;">
+            <div class="modal-header">
+                <h2>👤 Gestion des Profils</h2>
+                <span class="close-btn" onclick="closeModal('profileModal')">&times;</span>
             </div>
-        </div>
-
-        <div class="card">
-            <h3 style="margin: 0 0 10px 0; font-size: 0.9rem;">📥 Importer SBOM</h3>
-            <div id="drop-zone" class="drop-zone">
-                📄 Cliquez pour sélectionner un fichier JSON (CycloneDX / SPDX)
+            <div class="modal-body" style="display:flex; flex-direction:column; gap:15px;">
+                <p style="color:var(--text-muted); font-size:12px; margin:0;">
+                    Créez des profils pour isoler vos différents espaces de travail (historique, tableau de bord, Gantt).
+                </p>
+                <div style="display:flex; gap:10px;">
+                    <input type="text" id="newProfileName" class="global-search-input" placeholder="Nom du nouveau profil...">
+                    <button onclick="createNewProfile()" class="toolbar-btn" style="background:var(--accent-blue);">Créer</button>
+                </div>
+                <hr style="border:0; border-top:1px solid var(--border-color); width:100%; margin: 10px 0;">
+                <div id="profileList" style="display:flex; flex-direction:column; gap:10px; max-height: 250px; overflow-y:auto; padding-right: 5px;">
+                    </div>
             </div>
-            <input type="file" id="fileInput" accept=".json" style="display: none;">
-        </div>
-
-        <div id="history-section" style="display: none; flex: 1; overflow-y: auto;">
-            <h3 style="margin: 0 0 10px 0; font-size: 0.9rem; border-bottom: 1px solid var(--border); padding-bottom: 5px;">📚 Historique des imports</h3>
-            <ul id="file-list" style="padding: 0; margin: 0;"></ul>
         </div>
     </div>
 
-    <div class="main-content">
-        
-        <div class="header-kpi">
-            <div class="kpi-box">
-                <div style="color: var(--text-muted); font-size: 0.8rem;">Composants analysés</div>
-                <div id="comp-count" class="kpi-value">0</div>
+    <div id="cveModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📁 Audit des Vulnérabilités : <span id="modalCompName" style="color:var(--accent-blue)"></span></h2>
+                <span class="close-btn" onclick="closeModal('cveModal')">&times;</span>
             </div>
-            <div class="kpi-box">
-                <div style="color: var(--text-muted); font-size: 0.8rem;">Score de Santé</div>
-                <div id="health-gauge" class="kpi-value" style="color: var(--success);">100%</div>
+            <div class="modal-search-header">
+                <input type="text" id="cveSearch" class="modal-search-input" placeholder="🔍 Filtrer par ID ou Description..." onkeyup="filterCVEs()">
             </div>
-            <div class="kpi-box" style="border-color: rgba(248,81,73,0.3);">
-                <div style="color: var(--danger); font-size: 0.8rem; font-weight: bold;">CVE Détectées</div>
-                <div id="vulnerabilities-count" class="kpi-value" style="color: var(--danger);">0</div>
+            <div class="modal-body" id="cveList" style="background: var(--bg-main); padding: 20px;"></div>
+        </div>
+    </div>
+
+    <div id="taskEditModal" class="modal-overlay">
+        <div class="modal-content" style="width: 350px; height: auto;">
+            <div class="modal-header">
+                <h2>✏️ Éditer l'action</h2>
+                <span class="close-btn" onclick="closeModal('taskEditModal')">&times;</span>
             </div>
-            
-            <div class="kpi-box" style="flex: 1.5;">
-                <div style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 8px;">Répartition Risque EOL</div>
-                <div style="display: flex; gap: 8px; justify-content: center;">
-                    <div style="background: rgba(248,81,73,0.1); border: 1px solid var(--danger); padding: 4px 8px; border-radius: 6px; min-width: 40px;">
-                        <div style="font-size: 0.65rem; color: var(--danger); font-weight: bold;">P0</div>
-                        <div id="p0-count" style="font-size: 1.1rem; color: white; font-weight: bold;">0</div>
-                    </div>
-                    <div style="background: rgba(240,136,62,0.1); border: 1px solid var(--warning); padding: 4px 8px; border-radius: 6px; min-width: 40px;">
-                        <div style="font-size: 0.65rem; color: var(--warning); font-weight: bold;">P1</div>
-                        <div id="p1-count" style="font-size: 1.1rem; color: white; font-weight: bold;">0</div>
-                    </div>
-                    <div style="background: rgba(210,153,34,0.1); border: 1px solid #d29922; padding: 4px 8px; border-radius: 6px; min-width: 40px;">
-                        <div style="font-size: 0.65rem; color: #d29922; font-weight: bold;">P2</div>
-                        <div id="p2-count" style="font-size: 1.1rem; color: white; font-weight: bold;">0</div>
-                    </div>
-                    <div style="background: rgba(139,148,158,0.1); border: 1px solid #8b949e; padding: 4px 8px; border-radius: 6px; min-width: 40px;">
-                        <div style="font-size: 0.65rem; color: #8b949e; font-weight: bold;">P3</div>
-                        <div id="p3-count" style="font-size: 1.1rem; color: white; font-weight: bold;">0</div>
-                    </div>
-                    <div style="background: rgba(72,79,88,0.1); border: 1px solid #484f58; padding: 4px 8px; border-radius: 6px; min-width: 40px;">
-                        <div style="font-size: 0.65rem; color: #8b949e; font-weight: bold;">P4</div>
-                        <div id="p4-count" style="font-size: 1.1rem; color: white; font-weight: bold;">0</div>
-                    </div>
+            <div class="modal-body" style="display:flex; flex-direction:column; gap:15px;">
+                <input type="hidden" id="editTaskId">
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">NOM DE L'ACTION :</label>
+                    <input type="text" id="editTaskName" class="global-search-input" style="width:100%; margin-top:8px;">
+                </div>
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">COULEUR :</label>
+                    <input type="color" id="editTaskColor" style="width:100%; height:45px; border:1px solid var(--border-color); border-radius:6px; background:var(--bg-card); cursor:pointer; margin-top:8px;">
+                </div>
+                <div style="display:flex; gap:10px; margin-top: 10px;">
+                    <button onclick="saveTaskEdit()" class="toolbar-btn" style="flex:1; background:var(--accent-blue); border-color:var(--accent-blue);">💾 Valider</button>
+                    <button onclick="deleteEditedTask()" class="toolbar-btn" style="flex:1; background:rgba(255,68,68,0.1); color:var(--p0); border-color:var(--p0);">🗑️ Supprimer</button>
                 </div>
             </div>
         </div>
+    </div>
 
-        <div style="padding: 15px 30px; background: var(--bg-body); display: flex; gap: 15px; align-items: center; border-bottom: 1px solid var(--border);">
-            <input type="text" id="globalSearch" placeholder="🔍 Rechercher un composant, une CVE..." style="max-width: 400px;" oninput="render()">
-            
-            <div id="refresh-section" style="display: none; margin-left: auto;">
-                <button onclick="refresh()" style="background: transparent; border: 1px solid var(--text-muted); color: var(--text-main); padding: 8px 15px; border-radius: 4px; cursor: pointer;">
-                    🔄 Rafraîchir les APIs (EOL & OSV)
-                </button>
+    <div id="proxyModal" class="modal-overlay">
+        <div class="modal-content" style="width: 450px; height: auto;">
+            <div class="modal-header">
+                <h2>⚙️ Configuration Proxy (CORS)</h2>
+                <span class="close-btn" onclick="closeModal('proxyModal')">&times;</span>
             </div>
-        </div>
-
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        </tr>
-                </thead>
-                <tbody id="table-body">
-                    <tr><td colspan="8" style="text-align:center; padding: 40px; color: var(--text-muted);">Veuillez sélectionner ou créer une application.</td></tr>
-                </tbody>
-            </table>
+            <div class="modal-body" style="display:flex; flex-direction:column; gap:15px;">
+                <p style="color:var(--text-muted); font-size:12px; margin:0;">
+                    Contournez les pare-feux d'entreprise. Le tag <strong>{url}</strong> sera remplacé par l'adresse cible de l'API.
+                </p>
+                <select id="proxySelect" class="global-search-input" onchange="handleProxySelection()" style="width:100%; cursor:pointer;">
+                    <option value="">Aucun Proxy (Connexion directe)</option>
+                    <option value="https://corsproxy.io/?{url}">CorsProxy.io (Recommandé)</option>
+                    <option value="https://api.allorigins.win/raw?url={url}">AllOrigins.win</option>
+                    <option value="custom">Proxy d'entreprise personnalisé...</option>
+                </select>
+                <div id="customProxyDiv" style="display:none;">
+                    <input type="text" id="proxyCustomInput" class="global-search-input" style="width:100%;" placeholder="https://proxy.intra/?url={url}">
+                </div>
+                <div style="display:flex; gap:10px; margin-top: 10px;">
+                    <button onclick="testProxyConnection()" class="toolbar-btn" style="flex:1; background:var(--bg-list);">📡 Tester</button>
+                    <button onclick="saveProxyConfig()" class="toolbar-btn" style="flex:1; background:var(--accent-blue); border-color:var(--accent-blue);">💾 Enregistrer</button>
+                </div>
+                <div id="proxyTestResult" style="text-align:center; font-size:12px; min-height: 20px;"></div>
+            </div>
         </div>
     </div>
 
-    <div id="cve-modal" class="modal">
-        <div class="modal-content">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
-                <h2 id="cve-modal-title" style="margin: 0; font-size: 1.2rem;">Vulnérabilités</h2>
-                <button onclick="document.getElementById('cve-modal').style.display='none'" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.5rem;">&times;</button>
+    <div class="sticky-header">
+        <div class="top-bar" style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="title-section">
+                <h1 style="margin: 0 0 5px 0;">🛡️ SBOM Control Tower <span>| Édition Synchronisée</span></h1>
             </div>
+            <button onclick="openProfileModal()" class="toolbar-btn profile-btn" title="Gérer les profils de l'application">
+                👤 Profil : <span id="currentProfileNameDisplay" style="margin-left:5px;">Chargement...</span>
+            </button>
+        </div>
+        
+        <div class="sla-grid">
+            <div id="box-p0" class="sla-box"><h4>CRITIQUE</h4><span class="count">0</span><span class="sla-subtitle">Date dépassée</span></div>
+            <div id="box-p1" class="sla-box"><h4>URGENT</h4><span class="count">0</span><span class="sla-subtitle">&lt; 3 Mois</span></div>
+            <div id="box-p2" class="sla-box"><h4>ÉLEVÉ</h4><span class="count">0</span><span class="sla-subtitle">&lt; 6 Mois</span></div>
+            <div id="box-p3" class="sla-box"><h4>MOYEN</h4><span class="count">0</span><span class="sla-subtitle">&lt; 1 An</span></div>
+            <div id="box-p4" class="sla-box"><h4>SAIN</h4><span class="count">0</span><span class="sla-subtitle">&gt; 1 An</span></div>
+        </div>
+        
+        <div class="action-toolbar">
+            <input type="text" id="globalSearch" class="global-search-input" placeholder="🔍 Rechercher un composant ou CVE..." onkeyup="filterDashboard()">
+            <button onclick="forceUpdateAnalysis()" class="toolbar-btn" style="background:var(--bg-card);">🔄 Maj API</button>
+            <button onclick="document.getElementById('proxyModal').style.display='flex'" class="toolbar-btn" style="background:var(--bg-card);">⚙️ Proxy</button>
+            <button onclick="clearWorkspace()" class="toolbar-btn clear-btn">🧹 Vider le profil</button>
             
-            <input type="text" id="modalCveSearch" placeholder="Filtrer les CVE..." style="margin-bottom: 15px;">
-            
-            <div id="cve-list-container" style="overflow-y: auto; flex: 1; padding-right: 5px;"></div>
+            <button onclick="exportToCSV()" class="toolbar-btn" style="margin-left:auto;">📊 Export CSV</button>
+            <label for="fileIn" class="toolbar-btn refresh-btn">➕ Ajouter SBOM</label>
+            <input type="file" id="fileIn" accept=".json" multiple style="display:none;">
+            <button onclick="runDemo()" class="toolbar-btn demo-btn">🚀 Démo</button>
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <div class="scrollable-content">
+        <div class="dashboard-widget">
+            <h3 class="widget-title">📜 Bibliothèque des Imports (Profil Actuel)</h3>
+            <div id="historyList"></div>
+        </div>
+
+        <div class="dashboard-widget">
+            <h3 class="widget-title">🛡️ Inventaire des Composants & Vulnérabilités</h3>
+            <div class="table-header">
+                <div class="col-prio">Priorité</div>
+                <div class="col-comp">Composant Parent</div>
+                <div class="col-eol">Santé / Support</div>
+                <div class="col-short">Cible Court T.</div>
+                <div class="col-long">Cible Long T.</div>
+                <div class="col-impact">Apps Impactées</div>
+            </div>
+            <div id="results">
+                <p style='text-align:center; padding:30px; color:var(--text-muted);'>Importez un fichier SBOM pour commencer.</p>
+            </div>
+        </div>
+
+        <div class="dashboard-widget" style="margin-bottom: 50px;">
+            <div class="widget-title">
+                <div>📊 Planification de Remédiation (Année N)</div>
+                <div style="display:flex; align-items:center; gap:15px;">
+                    <div style="display:flex; align-items:center; gap:8px; background:var(--bg-list); padding:5px 12px; border-radius:6px; border:1px solid var(--border-color);">
+                        <span style="font-size:11px; font-weight:bold; color:var(--text-muted);">ZOOM :</span>
+                        <input type="range" id="ganttZoom" min="50" max="250" value="100" oninput="adjustGanttWidth(this.value)" style="cursor:pointer; width:100px;">
+                    </div>
+                    <button onclick="exportGanttToCSV()" class="toolbar-btn" style="height:30px; font-size:11px; background:var(--accent-blue); border-color:var(--accent-blue);">📊 Export Gantt</button>
+                </div>
+            </div>
+            <div id="ganttFilterContainer" class="gantt-controls" style="display:none;"></div>
+            <div id="ganttArea">
+                <p style='text-align:center; color:var(--text-muted); padding:30px; border:1px solid var(--border-color); border-radius:6px;'>
+                    Générez un SBOM pour afficher le planning des composants parents.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
 </body>
 </html>
