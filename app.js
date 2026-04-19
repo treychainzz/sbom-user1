@@ -1,889 +1,822 @@
-/** * RA-Pilot v7.5 - ÉDITION TITAN ABSOLUE
- * Optimisations : OSV Batching, Cache 2 Niveaux, Lazy Loading SBOM
- */
-
-// --- DICTIONNAIRE DE TRADUCTION POUR LES API (ENDOFLIFE SLUGS) ---
-// Transforme les noms de packages NPM/Maven/Docker en slugs stricts pour l'API.
-const eolSlugMap = {
-    // 🌍 Langages & Runtimes
-    "python3": "python",
-    "python2": "python",
-    "python-core": "python",
-    "node": "nodejs",
-    "node.js": "nodejs",
-    "java": "java",
-    "openjdk": "java", // EOL.date a "java" ou "oracle-jdk" ou "corretto"
-    "golang": "go",
-    "csharp": "dotnet", // C# suit le cycle de vie de .NET
-    "dotnet-core": "dotnet",
-
-    // 🗄️ Bases de données
-    "postgresql-client": "postgresql",
-    "postgres": "postgresql",
-    "mysql-server": "mysql",
-    "mariadb-server": "mariadb",
-    "mongodb-org": "mongodb",
-    "redis-server": "redis",
-    "elastic": "elasticsearch",
-    "sqlite3": "sqlite",
-    "cassandra-client": "cassandra",
-
-    // ⚙️ Serveurs & Infra
-    "nginx-core": "nginx",
-    "apache2": "httpd", // EOL date utilise "httpd" pour Apache Web Server
-    "apache": "httpd",
-    "tomcat-embed-core": "tomcat",
-    "tomcat-embed": "tomcat",
-    "haproxy-systemd": "haproxy",
-    "rabbitmq-server": "rabbitmq",
-
-    // 🛡️ OS & Système
-    "alpine-base": "alpine",
-    "ubuntu-minimal": "ubuntu",
-    "debian-sys": "debian",
-    "redhat-enterprise-linux": "rhel",
-    "redhat": "rhel",
-    "centos-release": "centos",
-    "amazon-linux-extras": "amazon-linux",
-    "amazonlinux": "amazon-linux",
-    "windows-server-core": "windows-server",
-
-    // ☕ Frameworks Java (Maven)
-    "spring-boot-starter-web": "spring-boot",
-    "spring-boot-starter": "spring-boot",
-    "spring-boot-autoconfigure": "spring-boot",
-    "spring-core": "spring-framework",
-    "spring-context": "spring-framework",
-    "spring-web": "spring-framework",
-    "spring-security-core": "spring-security",
-    "hibernate-core": "hibernate",
-    "hibernate-entitymanager": "hibernate",
-    
-    // (Note : Log4j, Jackson ou Guava ne sont pas toujours tracés par EOL.date, 
-    // l'API renverra proprement 404 et le script affichera "---")
-    "log4j-core": "log4j", 
-    "log4j-api": "log4j",
-
-    // ⚛️ Frameworks Frontend & Node (NPM)
-    "react-dom": "react",
-    "react-router": "react",
-    "react-native": "react-native",
-    "vue-router": "vue",
-    "vuex": "vue",
-    "vue3": "vue",
-    "@angular/core": "angular",
-    "angularjs": "angular", // Angular 1.x vs moderne
-    "next": "nextjs", // NPM c'est "next", EOL.date c'est "nextjs"
-    "nuxt3": "nuxtjs",
-
-    // 🐳 DevOps & Outils
-    "docker-ce": "docker",
-    "docker-cli": "docker",
-    "kubernetes-client": "kubernetes",
-    "kubelet": "kubernetes",
-    "kubectl": "kubernetes",
-    "terraform-provider-aws": "terraform"
-};
-
-// Fonction de nettoyage pour l'API (Infaillible)
-const getEolSlug = (rawName) => {
-    let n = (rawName || "").toLowerCase().trim();
-    
-    // 1. Traduction prioritaire via notre dictionnaire
-    if (eolSlugMap[n]) return eolSlugMap[n];
-    
-    // 2. Nettoyage des scopes NPM (ex: "@babel/core" -> "core")
-    if (n.startsWith('@') && n.includes('/')) {
-        n = n.split('/')[1];
-    }
-
-    // 3. Nettoyage des suffixes techniques courants
-    n = n.replace(/-(core|api|starter|web|client|server|module|impl|engine|cli|ce|release|base)$/i, '');
-    
-    // 4. On s'assure qu'il ne reste pas de chiffres collés à la fin (ex: vue3 -> vue)
-    n = n.replace(/[0-9]+$/, '');
-
-    return n.trim();
-};
-
-// --- MOTEUR DE RECONNAISSANCE DES NOMS (Fuzzy Matching Étendu) ---
-// Règle d'or : Les termes les plus longs/spécifiques doivent être AVANT les termes courts.
-const keywordRules = [
-    // 🐳 DevOps, Cloud & CI/CD
-    { key: "ansible", name: "Ansible" },
-    { key: "terraform", name: "Terraform" },
-    { key: "docker", name: "Docker" },
-    { key: "kube", name: "Kubernetes" }, // Capte kubernetes, kubectl, kubelet
-    { key: "helm", name: "Helm" },
-    { key: "jenkins", name: "Jenkins" },
-    { key: "gitlab", name: "GitLab" },
-    { key: "prometheus", name: "Prometheus" },
-    { key: "grafana", name: "Grafana" },
-    { key: "vault", name: "HashiCorp Vault" },
-    { key: "consul", name: "HashiCorp Consul" },
-
-    // 🌍 Langages & Runtimes
-    { key: "python", name: "Python" }, // Capte python3, python-core, etc.
-    { key: "node", name: "Node.js" },
-    { key: "openjdk", name: "OpenJDK" },
-    { key: "java", name: "Java" },
-    { key: "golang", name: "Go" },
-    { key: "ruby", name: "Ruby" },
-    { key: "php", name: "PHP" },
-    { key: "typescript", name: "TypeScript" },
-    { key: "rust", name: "Rust" },
-    { key: "scala", name: "Scala" },
-    { key: "kotlin", name: "Kotlin" },
-    { key: "dotnet", name: ".NET" },
-    { key: "csharp", name: "C#" },
-
-    // 🗄️ Bases de données & Caches
-    { key: "postgres", name: "PostgreSQL" }, // Capte postgresql, postgres-client
-    { key: "mysql", name: "MySQL" },
-    { key: "maria", name: "MariaDB" },
-    { key: "mongo", name: "MongoDB" },
-    { key: "redis", name: "Redis" },
-    { key: "elastic", name: "Elasticsearch" },
-    { key: "cassandra", name: "Apache Cassandra" },
-    { key: "sqlite", name: "SQLite" },
-    { key: "memcached", name: "Memcached" },
-    { key: "oracle", name: "Oracle DB" },
-    { key: "couchbase", name: "Couchbase" },
-
-    // ⚙️ Serveurs & Infra
-    { key: "nginx", name: "NGINX" },
-    { key: "apache2", name: "Apache HTTP Server" },
-    { key: "httpd", name: "Apache HTTP Server" },
-    { key: "tomcat", name: "Apache Tomcat" },
-    { key: "jetty", name: "Eclipse Jetty" },
-    { key: "haproxy", name: "HAProxy" },
-    { key: "traefik", name: "Traefik" },
-    { key: "envoy", name: "Envoy Proxy" },
-    { key: "rabbit", name: "RabbitMQ" },
-    { key: "kafka", name: "Apache Kafka" },
-
-    // 🛡️ OS, Système & Sécurité
-    { key: "alpine", name: "Alpine Linux" },
-    { key: "ubuntu", name: "Ubuntu" },
-    { key: "debian", name: "Debian" },
-    { key: "centos", name: "CentOS" },
-    { key: "redhat", name: "Red Hat Enterprise Linux" },
-    { key: "windows-server", name: "Windows Server" },
-    { key: "openssl", name: "OpenSSL" },
-    { key: "bouncycastle", name: "Bouncy Castle" },
-    { key: "bash", name: "Bash" },
-    { key: "curl", name: "cURL" },
-    { key: "wget", name: "GNU Wget" },
-    { key: "glibc", name: "GNU C Library" },
-    { key: "zlib", name: "Zlib" },
-
-    // ☕ Frameworks & Libs Backend
-    { key: "spring-boot", name: "Spring Boot" },
-    { key: "spring-security", name: "Spring Security" },
-    { key: "spring", name: "Spring Framework" },
-    { key: "hibernate", name: "Hibernate" },
-    { key: "log4j", name: "Apache Log4j" },
-    { key: "logback", name: "Logback" },
-    { key: "slf4j", name: "SLF4J" },
-    { key: "jackson", name: "Jackson" },
-    { key: "guava", name: "Google Guava" },
-    { key: "express", name: "Express.js" },
-    { key: "nestjs", name: "NestJS" },
-    { key: "django", name: "Django" },
-    { key: "flask", name: "Flask" },
-    { key: "fastapi", name: "FastAPI" },
-    { key: "laravel", name: "Laravel" },
-    { key: "symfony", name: "Symfony" },
-
-    // ⚛️ Frameworks & Libs Frontend
-    { key: "react-dom", name: "React DOM" },
-    { key: "react-router", name: "React Router" },
-    { key: "react", name: "React" },
-    { key: "vue", name: "Vue.js" },
-    { key: "angular", name: "Angular" },
-    { key: "svelte", name: "Svelte" },
-    { key: "jquery", name: "jQuery" },
-    { key: "bootstrap", name: "Bootstrap" },
-    { key: "tailwind", name: "Tailwind CSS" },
-    { key: "lodash", name: "Lodash" },
-    { key: "axios", name: "Axios" },
-    { key: "moment", name: "Moment.js" },
-    { key: "rxjs", name: "RxJS" },
-    { key: "redux", name: "Redux" },
-    { key: "webpack", name: "Webpack" },
-    { key: "vite", name: "Vite" }
-];
-
-const getPrettyName = (rawName) => {
-    let n = (rawName || "").toLowerCase();
-    
-    // 1. Recherche Intelligente : on lit nos règles de haut en bas
-    for (let rule of keywordRules) {
-        if (n.includes(rule.key)) {
-            return rule.name;
-        }
-    }
-    
-    // 2. Filet de Sécurité : Si inconnu, on nettoie au mieux
-    // On retire les chiffres à la toute fin (ex: "composant3" -> "composant")
-    let cleaned = n.replace(/[0-9]+$/, ''); 
-    // On remplace les tirets par des espaces et on met des majuscules
-    return cleaned.replace(/[-_.]/g, ' ')
-                  .replace(/\b\w/g, char => char.toUpperCase())
-                  .trim();
-};
-
-// --- 1. CONFIGURATION GLOBALE ---
-// --- 1. CONFIGURATION GLOBALE ---
-const PROXY = "https://api.codetabs.com/v1/proxy?quest=";
-const TIMEOUT_VAL = 15000;
-
-// --- 2. INITIALISATION DES CACHES ET DE LA BASE ---
-let db = JSON.parse(localStorage.getItem('ra_pilot_db')) || { apps: {}, mappings: {} };
-let eolCache = JSON.parse(localStorage.getItem('ra_pilot_eol_cache')) || {};
-let osvCache = JSON.parse(localStorage.getItem('ra_pilot_osv_cache')) || {};
-
-const CACHE_TTL_EOL = 7 * 24 * 60 * 60 * 1000; // 7 jours pour EOL
-const CACHE_TTL_OSV = 24 * 60 * 60 * 1000;     // 24 heures pour la Sécurité
-
-let curr = 'all';
-let eolProducts = []; // Pour l'autocomplétion manuelle
-
-// --- 3. UTILITAIRES DE BASE ---
 const $ = id => document.getElementById(id);
 
-const save = () => {
-    try { 
-        localStorage.setItem('ra_pilot_db', JSON.stringify(db)); 
-    } catch(e) { 
-        console.warn("Régime Titan activé : Nettoyage des données inutiles pour libérer la RAM.");
-        Object.values(db.apps).forEach(a => { 
-            if(a.files) a.files.forEach(f => delete f.rawData);
-        });
-        localStorage.setItem('ra_pilot_db', JSON.stringify(db));
-    }
+// ============================================================================
+// VARIABLES D'ÉTAT GLOBALES ET CLOISONNÉES (MULTI-PROFILS)
+// ============================================================================
+let appProfiles = [];
+let currentProfileId = null;
+
+// Données mémoire du profil actif
+let sbomHistory = [];
+let activeWorkspace = { components: [], dependencies: [] };
+let ganttTasks = [];
+
+// Cache et calculs volatils
+window.lastProcessedVulns = new Map(); 
+const cache = {};
+let selectedComponents = new Set();
+let ganttFiltersInitialized = false;
+
+// Variables Globales (non cloisonnées)
+let currentProxyUrl = "https://corsproxy.io/?{url}";
+let currentCVEs = [];
+
+const EOL_ALIAS_MAP = { 
+    'nodejs': 'node', 'reactjs': 'react', 'jdk': 'java', 
+    'jre': 'java', 'spring': 'spring-framework', 'spring-boot': 'spring-boot'
 };
 
-// --- UTILITAIRES : CONTRÔLE DU CHARGEMENT (MODE INJECTION) ---
-const showLoader = (title, desc) => {
-    let loader = document.getElementById('titan-loader');
+// ============================================================================
+// FONCTIONS DE STOCKAGE SÉCURISÉ PAR PROFIL
+// ============================================================================
+function safeGet(key) {
+    if (!currentProfileId) return null;
+    return localStorage.getItem(`${currentProfileId}_${key}`);
+}
+
+function safeSet(key, value) {
+    if (!currentProfileId) return;
+    localStorage.setItem(`${currentProfileId}_${key}`, value);
+}
+
+function safeRemove(key) {
+    if (!currentProfileId) return;
+    localStorage.removeItem(`${currentProfileId}_${key}`);
+}
+
+// ============================================================================
+// INITIALISATION ET GESTION DES PROFILS
+// ============================================================================
+window.onload = () => {
+    // 1. Initialisation des paramètres globaux
+    const p = localStorage.getItem('proxyUrl'); 
+    if(p) currentProxyUrl = p;
     
-    // S'il n'existe pas, on le fabrique et on le force à la racine (body)
-    if (!loader) {
-        loader = document.createElement('div');
-        loader.id = 'titan-loader';
-        loader.className = 'loader-overlay';
-        loader.innerHTML = `
-            <div class="loader-modal">
-                <div class="spinner"></div>
-                <h3 id="loader-title"></h3>
-                <p id="loader-desc"></p>
-            </div>
-        `;
-        document.body.appendChild(loader);
-    }
-    
-    // On met à jour le texte et on affiche
-    document.getElementById('loader-title').innerText = title || "Traitement...";
-    document.getElementById('loader-desc').innerText = desc || "Veuillez patienter.";
-    loader.style.display = 'flex';
-};
-
-const hideLoader = () => {
-    const loader = document.getElementById('titan-loader');
-    if (loader) loader.style.display = 'none';
-};
-
-// --- 4. MOTEUR DE RISQUE (CVSS & PRIORITÉ) ---
-const getSeverityData = (v) => {
-    let scores = []; 
-    const raw = JSON.stringify(v);
-    const numMatches = [...raw.matchAll(/["'](?:score|cvss|baseScore)["']\s*:\s*["']?(\d+(?:\.\d+))["']?/gi)];
-    numMatches.forEach(m => scores.push(parseFloat(m[1])));
-    return { score: scores.length > 0 ? Math.max(...scores.filter(s => s <= 10)) : 0 };
-};
-
-// --- CALCUL DE LA PRIORITÉ DU RISQUE ---
-const getItemPrio = (item) => {
-    // 1. RÈGLE D'OR (OVERRIDE) : La fin de vie absolue = Danger P0
-    if (item.eol && item.eol.includes('Expiré')) {
-        return 'P0';
+    const z = localStorage.getItem('ganttColumnWidth'); 
+    if(z) { 
+        document.documentElement.style.setProperty('--gantt-col', z + 'px'); 
+        if($('ganttZoom')) $('ganttZoom').value = z; 
     }
 
-    // 2. Anticipation : Si le composant expire dans l'année = Attention P1
-    if (item.eol && item.eol.includes('⚠️ Fin le')) {
-        return 'P1';
-    }
-
-    // 3. Récupération des failles (Compatible avec les doublons fusionnés)
-    const vulns = item.allVulns ? Array.from(item.allVulns.values()) : (item.vulns || []);
-    const count = vulns.length;
-
-    // 4. Grille de criticité basée sur le volume de failles
-    // (Tu pourras ajuster ces seuils selon la politique de ton entreprise)
-    if (count >= 50) return 'P0'; // Invasion de failles
-    if (count >= 15) return 'P1'; // Critique
-    if (count >= 5)  return 'P2'; // Majeur
-    if (count > 0)   return 'P3'; // Mineur
-
-    // 5. Par défaut : Tout va bien
-    return 'P4';
-};
-
-const getCat = n => {
-    const l = (n || "").toLowerCase();
-    if (l.includes("debian") || l.includes("ubuntu") || l.includes("rhel") || l.includes("alpine")) return "Infra";
-    if (l.includes("python") || l.includes("node") || l.includes("java") || l.includes("dotnet")) return "Runtime";
-    return "Applicatif";
-};
-
-// --- 5. APPELS API EXTERNES & CACHE INTÉLLIGENT ---
-
-// --- OUTIL DE COMPARAISON DE VERSIONS (SemVer) ---
-const isNewerOrEqual = (current, target) => {
-    if (!current || !target || target === '---') return false;
-    // On nettoie les lettres (ex: "v1.2.0" devient [1, 2, 0])
-    const cParts = String(current).replace(/[^\d.]/g, '').split('.').map(Number);
-    const tParts = String(target).replace(/[^\d.]/g, '').split('.').map(Number);
-    const len = Math.max(cParts.length, tParts.length);
-    
-    for (let i = 0; i < len; i++) {
-        const c = cParts[i] || 0;
-        const t = tParts[i] || 0;
-        if (c > t) return true;  // L'actuelle est plus récente
-        if (c < t) return false; // La cible est plus récente
-    }
-    return true; // Elles sont parfaitement égales
-};
-
-const fetchWithTimeout = async (url, options = {}) => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_VAL); 
-    try {
-        const response = await fetch(url, { ...options, signal: controller.signal });
-        clearTimeout(timeoutId);
-        return response;
-    } catch (error) {
-        clearTimeout(timeoutId);
-        throw error; 
-    }
-};
-
-const normalizeForEOL = (name, purl) => {
-    let n = (name || "").toLowerCase();
-    
-    // Si c'est un PURL Maven, on extrait "groupe:nom"
-    if (purl && purl.startsWith('pkg:maven/')) {
-        const match = purl.match(/pkg:maven\/(.*?)\/(.*?)@/);
-        if (match) n = `${match[1]}:${match[2]}`;
-    } 
-    // Si c'est du NPM avec un scope (ex: @babel/core)
-    else if (n.startsWith('@') && n.includes('/')) {
-        n = n.split('@')[1] || n; 
-    }
-
-    // Nettoyage des suffixes de versions qui polluent la recherche
-    return n.replace(/-(module|v\d+|core|api|starter|client|server)$/, '')
-            .replace(/\.final$|\.jre$/gi, '');
-};
-
-// --- 6. API : RÉCUPÉRATION DU CYCLE DE VIE (ENDOFLIFE.DATE) ---
-async function fetchEOL(rawName, currentVersion) {
-    const apiSlug = getEolSlug(rawName);
-    if (!apiSlug) return { eol: '---', latest: '---' };
-
-    try {
-        // Optionnel : ajoute un console.log ici pour voir l'URL générée dans ta console F12
-        // console.log("🔍 Checking EOL for:", `https://endoflife.date/api/${apiSlug}.json`);
-
-        const res = await fetch(`https://endoflife.date/api/${apiSlug}.json`);
-        
-        // C'est ici qu'on gère proprement le 404
-        if (res.status === 404) {
-            return { eol: '---', latest: '---' }; 
+    // 2. Initialisation des Profils
+    const storedProfiles = localStorage.getItem('appProfiles');
+    if (storedProfiles) {
+        appProfiles = JSON.parse(storedProfiles);
+        currentProfileId = localStorage.getItem('currentProfileId');
+        if (!appProfiles.find(p => p.id === currentProfileId)) {
+            currentProfileId = appProfiles[0].id;
         }
-
-        if (!res.ok) throw new Error('Erreur API');
-
-        const data = await res.json();
-        if (!data || data.length === 0) return { eol: '---', latest: '---' };
-
-        // ... (le reste de ta logique de matching de cycle) ...
-        let matched = data.find(c => currentVersion && currentVersion.startsWith(c.cycle)) || data[0];
-        
-        return {
-            eol: matched.eol === false ? '✨ Supporté' : (matched.eol === true ? '☠️ Expiré' : matched.eol),
-            latest: data[0].latest
-        };
-
-    } catch (e) {
-        return { eol: '---', latest: '---' };
+    } else {
+        // Création du profil par défaut si première visite
+        const defaultId = 'profile_' + Date.now();
+        appProfiles = [{ id: defaultId, name: 'Espace Principal' }];
+        currentProfileId = defaultId;
+        localStorage.setItem('appProfiles', JSON.stringify(appProfiles));
+        localStorage.setItem('currentProfileId', currentProfileId);
     }
-}
 
-// --- UTILITAIRE : TRADUCTION PURL -> ÉCOSYSTÈME OSV ---
-function getEcosystem(purl) {
-    if (!purl) return 'npm'; // Par défaut
+    // 3. Chargement des données du Profil Actif
+    loadProfileData();
 
-    // Un PURL ressemble à : pkg:npm/lodash@4.17.21
-    // On extrait la partie entre "pkg:" et "/"
-    const parts = purl.split(':');
-    if (parts.length < 2) return 'npm';
-    
-    const type = parts[1].split('/')[0].toLowerCase();
-
-    // Mapping des types PURL vers les noms officiels OSV
-    const mapping = {
-        'npm': 'npm',
-        'maven': 'Maven',
-        'pypi': 'PyPI',
-        'composer': 'Packagist',
-        'golang': 'Go',
-        'nuget': 'NuGet',
-        'cargo': 'Crates.io',
-        'deb': 'Debian',
-        'rpm': 'RPM',
-        'gem': 'RubyGems'
-    };
-
-    return mapping[type] || type; 
-}
-
-// --- FORCE LA RÉCUPÉRATION COMPLÈTE ---
-async function fetchSecurityBatch(chunk) {
-    const queries = chunk.map(item => ({
-        // Ici, on utilise la fonction qu'on vient de créer
-        package: { 
-            name: item.name, 
-            ecosystem: getEcosystem(item.purl) 
-        },
-        version: item.version
-    }));
-
-    try {
-        const res = await fetch('https://api.osv.dev/v1/querybatch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ queries })
+    // 4. Listeners globaux
+    document.addEventListener('click', e => {
+        document.querySelectorAll('.gantt-dropdown').forEach(dropdown => { 
+            if (!dropdown.contains(e.target)) dropdown.removeAttribute('open'); 
         });
-        const data = await res.json();
-        
-        // IMPORTANT : On renvoie TOUT l'objet vuln (avec details, severity, etc.)
-        return data.results.map(r => r.vulns || []); 
-    } catch (e) {
-        console.error("Erreur réseau OSV:", e);
-        return chunk.map(() => []);
-    }
-}
-
-// --- 6. IMPORT SBOM (LAZY LOADING) ---
-async function handleFile(file) {
-    if (!file) return;
-    let targetId = curr;
-    if (targetId === 'all') return alert("Sélectionnez une application spécifique d'abord.");
-    
-    const raw = await file.text(); 
-    const json = JSON.parse(raw);
-    const comps = json.components || []; 
-    const deps = json.dependencies || [];
-    const fileId = "f" + Date.now();
-    
-    showLoader("Lecture SBOM", "Construction de l'arborescence (Instant)...");
-    
-    const compMap = {}; 
-    comps.forEach(c => compMap[c['bom-ref'] || c.purl || c.name] = c);
-    
-    const tree = {}; 
-    const allC = new Set();
-    deps.forEach(d => { 
-        tree[d.ref] = d.dependsOn || []; 
-        d.dependsOn?.forEach(c => allC.add(c)); 
     });
-    
-    let topRefs = Object.keys(tree).filter(r => !allC.has(r));
-    if (topRefs.length === 0) topRefs = comps.map(c => c['bom-ref'] || c.purl || c.name);
-    
-    for (const ref of topRefs) {
-        const p = compMap[ref]; 
-        if (!p) continue;
-        const gId = "g" + Math.random().toString(36).slice(2,7);
-        
-        db.apps[targetId].items.push({ 
-            id: gId, name: p.name, version: p.version, purl: p.purl, 
-            isParent: true, childCount: (tree[ref]||[]).length, fileId,
-            eol: '⏳ Attente...', target: '...', vulns: [], status: 'pending'
-        });
-        
-        for (const cr of (tree[ref] || [])) {
-            const c = compMap[cr]; 
-            if (!c) continue;
-            db.apps[targetId].items.push({ 
-                id: "c"+Math.random(), name: c.name, version: c.version, purl: c.purl,
-                parentId: gId, fileId, 
-                eol: '⏳ Attente...', target: '...', vulns: [], status: 'pending'
-            });
-        }
-    }
-    
-    if (!db.apps[targetId].files) db.apps[targetId].files = [];
-    db.apps[targetId].files.push({ id: fileId, name: file.name, date: new Date().toLocaleString() });
-    
-    save(); 
-    if ($('fileInput')) $('fileInput').value = ""; 
-    render(); 
-    hideLoader();
+};
 
-    // Lancement du monstre en arrière-plan
-    scanAppInBackground(targetId, fileId);
-}
-
-// --- UTILITAIRE : LE FREIN MOTEUR ---
-const delay = ms => new Promise(res => setTimeout(res, ms));
-
-// --- 7. MOTEUR DE SCAN EN ARRIÈRE-PLAN (TITAN SCANNER) ---
-async function scanAppInBackground(appId, fileId) {
-    // 1. Récupération des éléments en attente d'analyse
-    const itemsToScan = db.apps[appId].items.filter(i => i.fileId === fileId && i.status === 'pending');
-    
-    // S'il n'y a rien à scanner, on s'assure que le loader est caché et on annule
-    if (itemsToScan.length === 0) {
-        if (typeof hideLoader === 'function') hideLoader();
-        return;
+function loadProfileData() {
+    // Mise à jour de l'affichage du nom du profil
+    const activeProfile = appProfiles.find(p => p.id === currentProfileId);
+    if($('currentProfileNameDisplay')) {
+        $('currentProfileNameDisplay').innerText = activeProfile ? activeProfile.name : 'Inconnu';
     }
 
-    // 2. 🟢 Affichage de la popup de chargement
-    if (typeof showLoader === 'function') {
-        showLoader("Scan de Sécurité (OSV & NVD)", `Analyse de ${itemsToScan.length} composants sur le réseau...`);
-    }
-
-    // (Optionnel) Mise à jour du texte du bouton si tu en as un
-    const btnRef = $('btnRefresh');
-    if (btnRef) { 
-        btnRef.innerText = `🔄 Scan réseau (0/${itemsToScan.length})...`; 
-        btnRef.style.color = "var(--warning)"; 
-    }
-
-    // 3. Découpage en paquets (Très efficace pour l'API OSV)
-    const CHUNK_SIZE = 100; 
-
-    for (let i = 0; i < itemsToScan.length; i += CHUNK_SIZE) {
-        const chunk = itemsToScan.slice(i, i + CHUNK_SIZE);
-        
-        // --- A. REQUÊTE OSV (Batch : 1 requête = 100 réponses d'un coup) ---
-        const batchVulns = await fetchSecurityBatch(chunk);
-        
-        // --- B. REQUÊTE EOL (Séquentiel : 1 par 1 avec un frein pour éviter l'erreur 429) ---
-        for (let j = 0; j < chunk.length; j++) {
-            const item = chunk[j];
-            
-            const eol = await fetchEOL(item.name, item.version, item.purl);
-            item.eol = eol?.eol || '---';
-            item.target = eol?.latest || '---';
-            item.vulns = batchVulns[j];
-            item.status = 'scanned'; 
-            
-            // 🛑 Micro-pause de 50 millisecondes (Le secret anti-bannissement)
-            await delay(50); 
-        }
-        
-        // 4. Sauvegarde et mise à jour visuelle après chaque paquet de 100
-        save();
-        render(); 
-        
-        // Mise à jour des compteurs du Loader
-        const currentCount = Math.min(i + CHUNK_SIZE, itemsToScan.length);
-        if (typeof showLoader === 'function') {
-            showLoader("Scan de Sécurité (OSV & NVD)", `Analyse en cours : ${currentCount} / ${itemsToScan.length} composants traités...`);
-        }
-        if (btnRef) {
-            btnRef.innerText = `🔄 Scan réseau (${currentCount}/${itemsToScan.length})...`;
-        }
-    }
-
-    // 5. 🔴 Le scan est terminé, on cache la popup et on remet le bouton à la normale
-    if (typeof hideLoader === 'function') hideLoader();
+    // Réinitialisation de la mémoire vive
+    window.lastProcessedVulns.clear();
+    selectedComponents.clear();
+    ganttFiltersInitialized = false;
     
-    if (btnRef) { 
-        btnRef.innerText = `🔄 Rafraîchir Titan`; 
-        btnRef.style.color = "var(--primary)"; 
+    // Chargement depuis le LocalStorage cloisonné
+    const h = safeGet('sbomHistory'); 
+    sbomHistory = h ? JSON.parse(h) : [];
+    
+    const t = safeGet('ganttTasks'); 
+    ganttTasks = t ? JSON.parse(t) : [];
+    
+    const w = safeGet('activeWorkspace'); 
+    activeWorkspace = w ? JSON.parse(w) : { components: [], dependencies: [] };
+
+    // Rendu UI
+    renderHistoryUI();
+    if (activeWorkspace.components.length > 0) {
+        processSbom(activeWorkspace);
+    } else {
+        clearWorkspaceUIOnly();
     }
 }
 
-// --- 8. MOTEUR DE RENDU : VUE "ACTION PLAN" ÉPURÉE ---
-function render() {
-    const isAll = curr === 'all';
-    const rawItems = isAll ? Object.values(db.apps).flatMap(a => a.items || []) : (db.apps[curr]?.items || []);
-    const search = ($('globalSearch')?.value || "").toLowerCase();
-    const body = $('table-body');
-    if (!body) return;
+// LOGIQUE DES MODALS ET BOUTONS DE PROFIL
+function openProfileModal() {
+    renderProfileModalList();
+    $('newProfileName').value = '';
+    $('profileModal').style.display = 'flex';
+}
 
-    // 1. Dédoublonnage par nom normalisé
-    const uniqueMap = {};
-    rawItems.forEach(i => {
-        if (i.isParent && (!i.vulns || i.vulns.length === 0)) return; 
-        const key = i.name.toLowerCase(); 
+function renderProfileModalList() {
+    const listDiv = $('profileList');
+    listDiv.innerHTML = appProfiles.map(p => `
+        <div class="profile-item ${p.id === currentProfileId ? 'active' : ''}">
+            <div>
+                <strong style="color:var(--text-main); font-size:13px;">${p.name}</strong>
+                ${p.id === currentProfileId ? '<span class="badge" style="background:var(--accent-blue); margin-left:8px;">Actif</span>' : ''}
+            </div>
+            <div>
+                ${p.id !== currentProfileId 
+                    ? `<button class="btn-sm btn-sm-success" onclick="switchProfile('${p.id}')">Basculer</button>` 
+                    : ''}
+                <button class="btn-sm btn-sm-danger" onclick="deleteProfile('${p.id}')" ${appProfiles.length === 1 ? 'disabled style="opacity:0.5; cursor:not-allowed;" title="Impossible de supprimer le dernier profil"' : ''}>🗑️</button>
+            </div>
+        </div>
+    `).join('');
+}
 
-        if (!uniqueMap[key]) {
-            uniqueMap[key] = { ...i, occurrences: 1, allVersions: new Set([i.version]), allVulns: new Map((i.vulns || []).map(v => [v.id, v])) };
+function createNewProfile() {
+    const nameInput = $('newProfileName').value.trim();
+    if (!nameInput) return alert("Veuillez entrer un nom de profil.");
+    
+    const newId = 'profile_' + Date.now();
+    appProfiles.push({ id: newId, name: nameInput });
+    localStorage.setItem('appProfiles', JSON.stringify(appProfiles));
+    
+    switchProfile(newId);
+    $('newProfileName').value = '';
+}
+
+function switchProfile(profileId) {
+    if (currentProfileId === profileId) return;
+    
+    currentProfileId = profileId;
+    localStorage.setItem('currentProfileId', currentProfileId);
+    
+    loadProfileData();
+    renderProfileModalList();
+}
+
+function deleteProfile(profileId) {
+    if (appProfiles.length <= 1) return alert("Vous ne pouvez pas supprimer le dernier profil.");
+    
+    if (confirm("Supprimer ce profil supprimera tout son historique, son workspace et son Gantt. Continuer ?")) {
+        // Supprimer les données du profil en LocalStorage
+        localStorage.removeItem(`${profileId}_sbomHistory`);
+        localStorage.removeItem(`${profileId}_activeWorkspace`);
+        localStorage.removeItem(`${profileId}_ganttTasks`);
+        
+        // Retirer de la liste
+        appProfiles = appProfiles.filter(p => p.id !== profileId);
+        localStorage.setItem('appProfiles', JSON.stringify(appProfiles));
+        
+        // Si c'était le profil actif, on bascule sur le premier dispo
+        if (currentProfileId === profileId) {
+            switchProfile(appProfiles[0].id);
         } else {
-            uniqueMap[key].occurrences++;
-            uniqueMap[key].allVersions.add(i.version);
-            (i.vulns || []).forEach(v => uniqueMap[key].allVulns.set(v.id, v));
-            const currentPrio = getItemPrio(uniqueMap[key]);
-            if ("P0P1P2P3P4P-".indexOf(getItemPrio(i)) < "P0P1P2P3P4P-".indexOf(currentPrio)) {
-                uniqueMap[key].eol = i.eol; uniqueMap[key].target = i.target;
+            renderProfileModalList();
+        }
+    }
+}
+
+// ============================================================================
+// GESTION DU PROXY (GLOBAL)
+// ============================================================================
+function handleProxySelection() { 
+    $('customProxyDiv').style.display = $('proxySelect').value === 'custom' ? 'block' : 'none'; 
+}
+
+async function testProxyConnection() {
+    const sel = $('proxySelect').value;
+    const base = sel === 'custom' ? $('proxyCustomInput').value : sel;
+    const res = $('proxyTestResult'); 
+    res.innerHTML = '<span style="color:var(--p3)">Test en cours... ⏳</span>';
+    try {
+        const target = 'https://endoflife.date/api/nodejs.json';
+        const url = base ? (base.includes('{url}') ? base.replace('{url}', encodeURIComponent(target)) : base + target) : target;
+        const req = await fetch(url);
+        res.innerHTML = req.ok ? '<span style="color:#2ea043">✅ Connexion réussie !</span>' : `<span style="color:var(--p0)">❌ Erreur HTTP: ${req.status}</span>`;
+    } catch (e) {
+        res.innerHTML = '<span style="color:var(--p0)">❌ Échec. URL bloquée ou invalide.</span>'; 
+    }
+}
+
+function saveProxyConfig() {
+    const sel = $('proxySelect').value; 
+    currentProxyUrl = sel === 'custom' ? $('proxyCustomInput').value : sel;
+    localStorage.setItem('proxyUrl', currentProxyUrl); 
+    closeModal('proxyModal');
+    if(activeWorkspace.components.length > 0 && confirm("Relancer l'analyse avec ce proxy ?")) {
+        forceUpdateAnalysis();
+    }
+}
+
+function doFetch(url, opts) { 
+    if(!currentProxyUrl) return fetch(url, opts); 
+    if(currentProxyUrl.includes('{url}')) return fetch(currentProxyUrl.replace('{url}', encodeURIComponent(url)), opts); 
+    return fetch(currentProxyUrl + url, opts); 
+}
+
+// ============================================================================
+// GESTION DE L'HISTORIQUE (CLOISONNÉ)
+// ============================================================================
+function saveToHistory(filename, data) {
+    const id = Date.now().toString(); 
+    sbomHistory.unshift({ id, filename, dateStr: new Date().toLocaleString('fr-FR'), data });
+    if(sbomHistory.length > 15) sbomHistory.pop();
+    safeSet('sbomHistory', JSON.stringify(sbomHistory)); 
+    renderHistoryUI(); 
+    return id;
+}
+
+function renderHistoryUI() {
+    const div = $('historyList'); 
+    if(sbomHistory.length === 0) { 
+        div.innerHTML = "<p style='color:var(--text-muted); font-size:12px; margin:0;'>Aucun fichier importé dans ce profil.</p>"; 
+        return; 
+    }
+    div.innerHTML = sbomHistory.map(item => `
+        <div class="history-item">
+            <span>
+                <strong>📄 ${item.filename}</strong> 
+                <span style="color:var(--text-muted); font-size:11px; margin-left:10px;">${item.dateStr}</span>
+            </span>
+            <div>
+                <button class="btn-sm btn-sm-success" onclick="appendHistory('${item.id}')" title="Ajouter au dashboard">➕</button>
+                <button class="btn-sm btn-sm-primary" onclick="replaceHistory('${item.id}')" title="Remplacer le dashboard">🔄</button>
+                <button class="btn-sm btn-sm-danger" onclick="deleteHistoryFile('${item.id}')" title="Supprimer">🗑️</button>
+            </div>
+        </div>`).join('');
+}
+
+function deleteHistoryFile(id) {
+    sbomHistory = sbomHistory.filter(i => i.id !== id); 
+    safeSet('sbomHistory', JSON.stringify(sbomHistory));
+    
+    const len = activeWorkspace.components.length;
+    activeWorkspace.components = activeWorkspace.components.filter(c => c._sourceId !== id);
+    activeWorkspace.dependencies = activeWorkspace.dependencies.filter(d => d._sourceId !== id);
+    
+    if(activeWorkspace.components.length !== len) { 
+        safeSet('activeWorkspace', JSON.stringify(activeWorkspace)); 
+        if(activeWorkspace.components.length > 0) {
+            processSbom(activeWorkspace); 
+        } else {
+            clearWorkspaceUIOnly(); 
+        }
+    } else { 
+        renderHistoryUI(); 
+    }
+}
+
+function appendHistory(id) {
+    const item = sbomHistory.find(x => x.id === id); 
+    if(!item) return;
+    item.data.components.forEach(c => c._sourceId = id); 
+    if(item.data.dependencies) item.data.dependencies.forEach(d => d._sourceId = id);
+    
+    activeWorkspace.components = activeWorkspace.components.filter(c => c._sourceId !== id); 
+    activeWorkspace.dependencies = activeWorkspace.dependencies.filter(d => d._sourceId !== id);
+    
+    activeWorkspace.components.push(...item.data.components); 
+    activeWorkspace.dependencies.push(...(item.data.dependencies || []));
+    
+    safeSet('activeWorkspace', JSON.stringify(activeWorkspace)); 
+    processSbom(activeWorkspace);
+}
+
+function replaceHistory(id) {
+    const item = sbomHistory.find(x => x.id === id); 
+    if(!item) return;
+    item.data.components.forEach(c => c._sourceId = id); 
+    if(item.data.dependencies) item.data.dependencies.forEach(d => d._sourceId = id);
+    
+    activeWorkspace = { components: [...item.data.components], dependencies: [...(item.data.dependencies || [])] };
+    safeSet('activeWorkspace', JSON.stringify(activeWorkspace)); 
+    
+    ganttFiltersInitialized = false; 
+    selectedComponents.clear(); 
+    processSbom(activeWorkspace);
+}
+
+const fileIn = $('fileIn');
+if (fileIn) {
+    fileIn.addEventListener('change', async e => {
+        for(let f of e.target.files) {
+            const data = JSON.parse(await f.text()); 
+            const nid = saveToHistory(f.name, data);
+            if(data.components) { 
+                data.components.forEach(c => c._sourceId = nid); 
+                activeWorkspace.components.push(...data.components); 
+            }
+            if(data.dependencies) { 
+                data.dependencies.forEach(d => d._sourceId = nid); 
+                activeWorkspace.dependencies.push(...data.dependencies); 
             }
         }
+        safeSet('activeWorkspace', JSON.stringify(activeWorkspace)); 
+        processSbom(activeWorkspace); 
+        e.target.value = '';
     });
+}
 
-    let display = Object.values(uniqueMap);
-    if (search) display = display.filter(i => i.name.toLowerCase().includes(search) || i.vulns.some(v => v.id.toLowerCase().includes(search)));
-    display.sort((a,b) => "P0P1P2P3P4P-".indexOf(getItemPrio(a)) - "P0P1P2P3P4P-".indexOf(getItemPrio(b)));
+function clearWorkspace() {
+    activeWorkspace = { components: [], dependencies: [] }; 
+    safeRemove('activeWorkspace');
+    ganttTasks = []; 
+    safeRemove('ganttTasks');
+    
+    clearWorkspaceUIOnly();
+}
 
-    // 2. En-tête de tableau
-    const head = document.querySelector('thead tr');
-    if (head) {
-        head.innerHTML = `<th>Composant (Recherche 🔗)</th><th>Catégorie</th><th>Versions</th><th>Date EOL</th><th>Version Cible</th><th>Priorité</th><th align="center">Impact</th>`;
-    }
+function clearWorkspaceUIOnly() {
+    window.lastProcessedVulns.clear(); 
+    selectedComponents.clear(); 
+    ganttFiltersInitialized = false; 
+    
+    [0,1,2,3,4].forEach(i => {
+        const box = $(`box-p${i}`);
+        if(box) box.querySelector('.count').innerText = "0";
+    }); 
+    
+    $('results').innerHTML = "<p style='text-align:center; padding:30px; color:var(--text-muted);'>Espace de travail du profil vidé.</p>"; 
+    $('globalSearch').value = "";
+    renderGantt();
+}
 
-    if (display.length === 0) {
-        body.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:30px; color:#666;">Aucun composant à afficher.</td></tr>`;
-        updateKPIs(rawItems);
-        renderFiles();
-        return;
-    }
+function forceUpdateAnalysis() { 
+    if(activeWorkspace.components.length > 0) { 
+        Object.keys(cache).forEach(k => delete cache[k]); 
+        processSbom(activeWorkspace); 
+    } 
+}
 
-    // 3. Dessin du tableau avec le badge CVE interactif
-    body.innerHTML = display.map(i => {
-        const prio = getItemPrio(i);
-        const totalVulns = i.allVulns ? i.allVulns.size : (i.vulns?.length || 0); // On compte les CVE uniques fusionnées
-        
-        let targetText = i.target;
-        const allUp = Array.from(i.allVersions).every(v => isNewerOrEqual(v, targetText));
-        
-        if (targetText !== '---' && allUp) {
-            targetText = (prio === 'P0' || prio === 'P1') ? `<span style="color:var(--danger)">🚨 Patch Attendu</span>` : `<span style="color:#666">✨ À jour</span>`;
-        } else if (targetText !== '---') {
-            targetText = `<b style="color:var(--success)">${targetText}</b>`; 
-        }
+function filterDashboard() { 
+    const t = $('globalSearch').value.toLowerCase(); 
+    document.querySelectorAll('#results details').forEach(r => {
+        r.style.display = r.getAttribute('data-search').includes(t) ? "" : "none";
+    }); 
+}
 
-        const versions = Array.from(i.allVersions);
-        const vDisp = versions.length > 2 ? `${versions.length} versions` : versions.join(' / ');
+// ============================================================================
+// EXPORTS CSV ET MODALS
+// ============================================================================
+function exportToCSV() {
+    if(!lastProcessedVulns.size) return alert("Le tableau est vide.");
+    let csv = "Prio;Composant;Version;Sante;Court_T;Long_T;CVEs;Apps_Impactees\n";
+    Array.from(lastProcessedVulns.values()).sort((a,b)=>a.p-b.p).forEach(v => {
+        csv += `"P${v.p}";"${v.name}";"${v.version}";"${v.status}";"${v.short}";"${v.long}";"${v.cves?v.cves.length:0}";"${v.impacted.join(',')}"\n`;
+    });
+    const a = document.createElement('a'); 
+    a.href = URL.createObjectURL(new Blob([new Uint8Array([0xEF,0xBB,0xBF]), csv], {type:"text/csv;charset=utf-8;"})); 
+    a.download = `Dashboard_Profil_${currentProfileId}.csv`; 
+    a.click();
+}
 
-        // LE FAMEUX BOUTON CVE (Seulement s'il y a des vulnérabilités)
-        const badgeCveHtml = totalVulns > 0 
-            ? `<span class="badge-cve" onclick="openCVE(event, '${i.id}')" title="Voir le détail des vulnérabilités">${totalVulns} CVE</span>` 
-            : '';
+function exportGanttToCSV() {
+    if(!ganttTasks.length) return alert("Aucune action dans le Gantt.");
+    const m = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre']; 
+    let csv = "Application_Parente;Action;Mois_Debut;Duree_Mois;Couleur\n";
+    ganttTasks.forEach(t => {
+        const idx = Math.max(0, Math.min(11, Math.floor((t.left/100)*12)));
+        const dur = ((t.width/100)*12).toFixed(1);
+        csv += `"${t.app}";"${t.name}";"${m[idx]}";"${dur}";"${t.color}"\n`;
+    });
+    const a = document.createElement('a'); 
+    a.href = URL.createObjectURL(new Blob([new Uint8Array([0xEF,0xBB,0xBF]), csv], {type:"text/csv;charset=utf-8;"})); 
+    a.download = `Gantt_Profil_${currentProfileId}.csv`; 
+    a.click();
+}
 
+function closeModal(id) { $(id).style.display = 'none'; }
+
+function openCVEModal(event, compName, compVersion) { 
+    event.stopPropagation(); 
+    const d = cache[`${compName.toLowerCase()}_${compVersion}`]; 
+    if(!d || !d.cves) return; 
+    currentCVEs = d.cves; 
+    $('modalCompName').innerText = `${compName} (v${compVersion})`; 
+    $('cveSearch').value = '';
+    renderCVEs(currentCVEs); 
+    $('cveModal').style.display = 'flex'; 
+}
+
+function filterCVEs() { 
+    const q = $('cveSearch').value.toLowerCase(); 
+    renderCVEs(currentCVEs.filter(c => c.id.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q))); 
+}
+
+function renderCVEs(list) {
+    $('cveList').innerHTML = list.map(c => {
+        const bg = c.severity==='CRITICAL'?'#ff4444':c.severity==='HIGH'?'#ff7b72':(c.severity==='MEDIUM'||c.severity==='MODERATE')?'#ffa657':'#388bfd';
+        const tc = (bg==='#ffa657')?'#000':'#fff';
         return `
-            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                <td>
-                    <a href="https://www.google.com/search?q=${encodeURIComponent(i.name + ' vulnerabilities')}" target="_blank" style="text-decoration:none; color:inherit;">
-                        <b>${i.name}</b> <small style="color:var(--primary); opacity:0.6;">🔍</small>
-                    </a>
-                    ${badgeCveHtml}
-                </td>
-                <td><span class="cat-badge cat-${getCat(i.name).toLowerCase()}">${getCat(i.name)}</span></td>
-                <td style="font-family:monospace; font-size:0.8rem;">${vDisp}</td>
-                <td>${i.eol || '---'}</td>
-                <td>${targetText}</td>
-                <td><span class="badge-prio badge-${prio.toLowerCase()}">${prio}</span></td>
-                <td align="center"><span style="font-size:0.75rem; background:rgba(255,255,255,0.1); padding:4px 8px; border-radius:12px;">💥 ${i.occurrences}x</span></td>
-            </tr>`;
-    }).join('');
-
-    updateKPIs(rawItems);
-    renderFiles();
-}
-
-function updateKPIs(data) {
-    const counts = { P0:0, P1:0, P2:0, P3:0, P4:0 }; 
-    data.forEach(i => { const p = getItemPrio(i); if(counts[p] !== undefined) counts[p]++; });
-    
-    if ($('comp-count')) $('comp-count').innerText = data.length;
-    if ($('vulnerabilities-count')) $('vulnerabilities-count').innerText = data.reduce((a,i) => a + (i.vulns?.length || 0), 0);
-    ['p0','p1','p2','p3','p4'].forEach(p => { if ($(p+'-count')) $(p+'-count').innerText = counts[p.toUpperCase()]; });
-    
-    const scanned = data.filter(i => i.status !== 'pending');
-    const s = scanned.length ? Math.max(0, 100 - (counts.P0 * 15) - (counts.P1 * 5)) : 100;
-    const g = $('health-gauge'); 
-    if (g) { g.innerText = data.length === 0 ? '--%' : Math.round(s) + "%"; g.style.color = s > 70 ? 'var(--success)' : (s > 40 ? 'var(--warning)' : 'var(--danger)'); }
-}
-
-function renderFiles() {
-    const historySection = $('history-section'); const list = $('file-list');
-    if (!list) return;
-    if (curr === 'all' || !db.apps[curr]) { if (historySection) historySection.style.display = "none"; else list.style.display = "none"; return; }
-    
-    const files = db.apps[curr].files || [];
-    if (historySection) historySection.style.display = files.length > 0 ? "block" : "none";
-    list.style.display = files.length > 0 ? "block" : "none";
-    
-    list.innerHTML = [...files].reverse().map(f => `
-        <li style="display:flex; justify-content:space-between; padding:8px; border-bottom:1px solid #333; background: rgba(255,255,255,0.02); margin-bottom:5px;">
-            <span style="color:#58a6ff; font-size:0.8rem;">📄 ${f.name} <small style="color:#888">(${f.date})</small></span>
-            <button onclick="delSbom(event, '${f.id}')" style="background:transparent; border:none; color:#f85149; cursor:pointer;">🗑️</button>
-        </li>`).join('');
-}
-
-// --- 9. INTERFACE & ÉVÉNEMENTS GLOBAUX ---
-window.toggle = id => { 
-    document.querySelectorAll('.child-of-'+id).forEach(c => c.classList.toggle('is-expanded')); 
-    const i = $('icon-'+id); if(i) i.innerText = i.innerText === "▶" ? "▼" : "▶"; 
-};
-
-window.openCVE = (e, id) => {
-    if (e) e.stopPropagation();
-    const item = Object.values(db.apps).flatMap(a => a.items).find(x => x.id === id);
-    
-    if (!item || !item.vulns || item.vulns.length === 0) return;
-
-    $('cve-modal-title').innerText = item.name;
-    $('cve-list-container').innerHTML = item.vulns.map(v => {
-        const sev = getSeverityInfo(v);
-        // On privilégie 'details' (long), sinon 'summary' (court)
-        const desc = v.details || v.summary || "Aucune description technique.";
-
-        return `
-        <div style="background:rgba(255,255,255,0.02); border:1px solid #30363d; padding:15px; margin-bottom:12px; border-radius:8px; border-left:4px solid ${sev.color};">
-            <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
-                <b style="color:#58a6ff; font-family:monospace;">${v.id}</b>
-                <span style="background:${sev.color}; color:white; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:bold;">
-                    ${sev.label} ${sev.score !== 'N/A' ? sev.score : ''}
-                </span>
+        <div style="border-left:4px solid ${bg}; margin-bottom:15px; background:var(--bg-card); padding:15px; border-radius:6px; border: 1px solid var(--border-color);">
+            <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border-color); padding-bottom:10px; margin-bottom:10px;">
+                <div style="display:flex; align-items:center; gap:15px;">
+                    <span style="background:${bg}; color:${tc}; padding:4px 10px; border-radius:4px; font-weight:bold;">${c.exactScore}</span>
+                    <div>
+                        <strong style="font-size:1.2em; display:block;">${c.id}</strong>
+                        <span style="font-size:10px; color:${bg}; text-transform:uppercase;">${c.severity}</span>
+                    </div>
+                </div>
+                <a href="${c.link}" target="_blank" style="color:var(--text-muted); text-decoration:none;">🔗 OSV</a>
             </div>
-            <div style="color:#e6edf3; font-weight:bold; margin-bottom:8px; font-size:0.9rem;">${v.summary || ''}</div>
-            <div style="color:#8b949e; font-size:0.8rem; line-height:1.4; white-space:pre-wrap;">${desc}</div>
+            <p style="margin:0 0 10px 0; color:#a1aab3; line-height:1.5;">${c.desc}</p>
+            <div style="background:rgba(88,166,255,0.1); padding:8px; border-radius:4px;">
+                <strong style="color:var(--accent-blue)">Solution :</strong> Patcher vers v${c.fixed.replace('v','')}
+            </div>
         </div>`;
     }).join('');
-
-    $('cve-modal').style.display = 'flex';
-};
-
-// --- UTILITAIRE : CALCUL DE LA SÉVÉRITÉ ---
-function getSeverityInfo(v) {
-    let score = null;
-    let label = "UNKNOWN";
-
-    // 1. Cherche dans le standard OSV
-    if (v.severity) {
-        const cvss = v.severity.find(s => s.type.startsWith('CVSS'));
-        if (cvss) score = cvss.score;
-    }
-    
-    // 2. Cherche dans les métadonnées spécifiques (GitHub / NVD)
-    if (!score && v.database_specific) {
-        const ds = v.database_specific;
-        if (ds.cvss && ds.cvss.score) score = ds.cvss.score;
-        else if (ds.severity) label = ds.severity.toUpperCase();
-    }
-
-    // 3. Attribution des couleurs Titan
-    let color = "#6e7681"; // Gris (Inconnu)
-    if (score) {
-        const s = parseFloat(score);
-        if (s >= 9.0) { label = "CRITICAL"; color = "#cf222e"; }
-        else if (s >= 7.0) { label = "HIGH"; color = "#d29922"; }
-        else if (s >= 4.0) { label = "MEDIUM"; color = "#9e6a03"; }
-        else { label = "LOW"; color = "#30363d"; }
-    } else if (label !== "UNKNOWN") {
-        if (label === "CRITICAL") color = "#cf222e";
-        if (label === "HIGH") color = "#d29922";
-    }
-
-    return { 
-        score: score ? parseFloat(score).toFixed(1) : "N/A", 
-        label: label, 
-        color: color 
-    };
 }
 
-window.delSbom = (e, id) => { 
-    e.stopPropagation();
-    if(confirm('Supprimer ce SBOM et ses composants ?')) { 
-        db.apps[curr].files = db.apps[curr].files.filter(f => f.id !== id); 
-        db.apps[curr].items = db.apps[curr].items.filter(i => i.fileId !== id); 
-        save(); render(); 
-    } 
-};
-
-window.delApp = () => { if (confirm("Supprimer l'application ?")) { delete db.apps[curr]; save(); location.reload(); } };
-
-document.addEventListener('DOMContentLoaded', () => {
-    const sel = $('currentAppSelector');
-    if (sel) {
-        sel.innerHTML = '<option value="all">🌐 Vue Globale</option>' + Object.values(db.apps).map(a => `<option value="${a.id}">${a.name}</option>`).join('');
-        sel.onchange = (e) => { curr = e.target.value; render(); };
-    }
-    
-    if($('globalSearch')) $('globalSearch').oninput = () => render();
-    if($('drop-zone')) $('drop-zone').onclick = () => $('fileInput').click();
-    if($('fileInput')) $('fileInput').onchange = e => handleFile(e.target.files[0]);
-    if($('btnRefresh')) $('btnRefresh').onclick = () => scanAppInBackground(curr, db.apps[curr]?.files[0]?.id); // Rafraîchit le dernier fichier
-    
-    if($('btnCreateAppConfirm')) $('btnCreateAppConfirm').onclick = () => {
-        const n = $('newAppName').value; if(!n) return;
-        const id = "app-"+Date.now(); db.apps[id] = { id, name: n, items: [], files: [] };
-        save(); location.reload();
-    };
-
-    render();
-});
-
-function getSeverityInfo(v) {
-    let score = null;
-    let label = "UNKNOWN";
-    let color = "#6e7681"; // Gris
-
-    // 1. Recherche dans le tableau de sévérité standard OSV
-    if (v.severity && Array.isArray(v.severity)) {
-        const cvss = v.severity.find(s => s.type === 'CVSS_V3' || s.type === 'CVSS_V2');
-        if (cvss && cvss.score) {
-            score = cvss.score;
-        }
-    }
-
-    // 2. Backup : Recherche dans database_specific (Format GitHub/GitLab)
-    if (!score && v.database_specific) {
-        if (v.database_specific.cvss && v.database_specific.cvss.score) {
-            score = v.database_specific.cvss.score;
-        } else if (v.database_specific.severity) {
-            label = v.database_specific.severity.toUpperCase();
-        }
-    }
-
-    // 3. Traduction du score numérique en Label et Couleur
-    if (score) {
-        const s = parseFloat(score);
-        if (s >= 9.0) { label = "CRITICAL"; color = "#cf222e"; }
-        else if (s >= 7.0) { label = "HIGH"; color = "#d29922"; }
-        else if (s >= 4.0) { label = "MEDIUM"; color = "#9e6a03"; }
-        else { label = "LOW"; color = "#30363d"; }
-    } else {
-        // Si on a un label texte mais pas de score
-        if (label === "CRITICAL") color = "#cf222e";
-        if (label === "HIGH") color = "#d29922";
-        if (label === "MEDIUM") color = "#9e6a03";
-    }
-
-    return { 
-        score: score ? parseFloat(score).toFixed(1) : "?.?", 
-        label, 
-        color 
-    };
+// ============================================================================
+// MOTEUR D'ANALYSE DE SÉCURITÉ
+// ============================================================================
+function calculateUniversalCVSS(v) {
+    if(!v || !v.startsWith('CVSS:3')) return "N/A";
+    const m = {}; v.split('/').forEach(p => { const [k, val] = p.split(':'); m[k] = val; });
+    const AV={'N':0.85,'A':0.62,'L':0.55,'P':0.2}[m.AV]||0, AC={'L':0.77,'H':0.44}[m.AC]||0, UI={'N':0.85,'R':0.62}[m.UI]||0;
+    const PR=m.S==='C'?{'N':0.85,'L':0.68,'H':0.50}[m.PR]||0:{'N':0.85,'L':0.62,'H':0.27}[m.PR]||0;
+    const C={'H':0.56,'L':0.22,'N':0}[m.C]||0, I={'H':0.56,'L':0.22,'N':0}[m.I]||0, A={'H':0.56,'L':0.22,'N':0}[m.A]||0;
+    const iss=1-((1-C)*(1-I)*(1-A)); let imp=m.S==='U'?6.42*iss:7.52*(iss-0.029)-3.25*Math.pow(iss-0.02, 15);
+    const exp=8.22*AV*AC*PR*UI; if(imp<=0) return "0.0";
+    let base=m.S==='U'?Math.min(imp+exp,10):Math.min(1.08*(imp+exp),10); 
+    return (Math.ceil(Math.round(base*100000)/10000)/10).toFixed(1);
 }
 
-// --- RUSTINE : FONCTION DE CRÉATION D'APP ---
-window.createApp = () => { 
-    const inputNode = document.getElementById('newAppName');
-    const n = inputNode ? inputNode.value : null;
+function calculateP(eol) { 
+    const d = Math.ceil((new Date(eol)-new Date())/86400000); 
+    return d<=0 ? 0 : d<90 ? 1 : d<180 ? 2 : d<365 ? 3 : 4; 
+}
+
+async function getSecurityData(name, version, purl, type) {
+    const k = `${name.toLowerCase()}_${version}`; 
+    if(cache[k]) return cache[k];
     
-    if (n) { 
-        const id = "app-" + Date.now(); 
-        db.apps[id] = { id, name: n, items: [], files: [] }; 
-        save(); 
-        location.reload(); 
-    } else {
-        alert("Veuillez entrer un nom pour l'application.");
+    let res = { p:4, status: "Inconnu", short: "v"+version, long: "---" }; 
+    if(type === 'application') return res;
+    
+    const originalName = name.toLowerCase(); 
+    const eco = purl?.split(':')[1]?.split('/')[0]?.toLowerCase() || 'npm';
+    const slug = EOL_ALIAS_MAP[originalName] || originalName; 
+    let isEol = false;
+    
+    try {
+        const eol = await doFetch(`https://endoflife.date/api/${slug}.json`);
+        if(eol && eol.ok) {
+            const h = await eol.json(); 
+            const cy = h.find(x => version.startsWith(String(x.cycle)));
+            if(cy) {
+                isEol = true;
+                if(cy.eol === false) { res.p=4; res.status="Support Actif"; res.short="v"+cy.latest; res.long="v"+h[0].latest; }
+                else { res.p=calculateP(cy.eol); res.status=cy.eol; res.short="v"+cy.latest; res.long="v"+h[0].latest; }
+            }
+        }
+    } catch(e) {}
+
+    if(!isEol && eco === 'npm') {
+        try {
+            const npm = await doFetch(`https://registry.npmjs.org/${originalName}`);
+            if(npm && npm.ok) {
+                const d = await npm.json(); 
+                const lat = d['dist-tags']?.latest; 
+                const dt = d.time?.[version];
+                if(dt && lat) {
+                    const age = (new Date() - new Date(dt)) / 86400000;
+                    if(age > 1460) { res.p=0; res.status="Obsolète (> 4 ans)"; } 
+                    else if(age > 1095) { res.p=2; res.status="Risque Élevé (> 3 ans)"; } 
+                    else if(age > 730) { res.p=3; res.status="Risque Moyen (> 2 ans)"; } 
+                    else { res.p=4; res.status="Sain (< 2 ans)"; }
+                    res.short = "v"+lat; res.long = "v"+lat;
+                }
+            }
+        } catch(e) {}
     }
-};
+
+    try {
+        const osv = await doFetch('https://api.osv.dev/v1/query', { 
+            method:'POST', 
+            body: JSON.stringify({version, package:{name:originalName, ecosystem:eco==='npm'?'npm':'Maven'}}) 
+        });
+        
+        if(osv && osv.ok) {
+            const j = await osv.json();
+            if(j.vulns) {
+                res.p=0; res.status="VULNÉRABLE";
+                res.cves = j.vulns.map(v => ({
+                    id: v.aliases?.[0]||v.id, 
+                    severity: v.database_specific?.severity||"HIGH",
+                    exactScore: v.database_specific?.cvss?.score || calculateUniversalCVSS(v.severity?.[0]?.score) || "N/A",
+                    desc: v.summary||v.details, 
+                    link: `https://osv.dev/vulnerability/${v.id}`,
+                    fixed: v.affected?.[0]?.ranges?.[0]?.events?.find(x=>x.fixed)?.fixed || "Patcher"
+                })).sort((a,b)=>b.exactScore-a.exactScore);
+            }
+        }
+    } catch(e) {}
+    
+    return cache[k] = res;
+}
+
+// ============================================================================
+// PROCESSEUR SBOM
+// ============================================================================
+async function processSbom(workspace) {
+    $('loading').style.display = 'flex'; 
+    $('progressBar').style.width = '0%';
+    
+    const comps = workspace.components || [], deps = workspace.dependencies || [];
+    const cMap = new Map(); comps.forEach(c => cMap.set(c['bom-ref'], c));
+    const dMap = new Map(); deps.forEach(d => { if(!dMap.has(d.ref)) dMap.set(d.ref, new Set()); (d.dependsOn||[]).forEach(r => dMap.get(d.ref).add(r)); });
+
+    const u = []; const s = new Set();
+    comps.forEach(c => { 
+        const k = `${c.name.toLowerCase()}|${c.version}`; 
+        if(!s.has(k) && c.type !== 'application') { u.push(c); s.add(k); } 
+    });
+    
+    for(let i=0; i<u.length; i+=10) {
+        $('progressBar').style.width = Math.round((i/u.length)*100)+'%';
+        await Promise.all(u.slice(i, i+10).map(x => getSecurityData(x.name, x.version, x.purl, x.type)));
+    }
+
+    lastProcessedVulns.clear();
+    
+    comps.filter(c => c.type === 'application').forEach(app => {
+        const appLabel = `${app.name} (v${app.version||'?'})`;
+        (dMap.get(app['bom-ref'])||[]).forEach(ref => {
+            const child = cMap.get(ref);
+            if(child) {
+                const info = cache[`${child.name.toLowerCase()}_${child.version}`];
+                if(info && info.p < 5) {
+                    const k = `${child.name}|${child.version}`;
+                    if(!lastProcessedVulns.has(k)) lastProcessedVulns.set(k, {...child, ...info, impacted:[]});
+                    if(!lastProcessedVulns.get(k).impacted.includes(appLabel)) lastProcessedVulns.get(k).impacted.push(appLabel);
+                }
+            }
+        });
+    });
+
+    const pStats = [0,0,0,0,0]; 
+    let html = "";
+    
+    Array.from(lastProcessedVulns.values()).sort((a,b)=>a.p-b.p).forEach(v => {
+        pStats[v.p]++;
+        const btn = v.cves ? `<button class="cve-badge" onclick="openCVEModal(event, '${v.name}', '${v.version}')">🚨 ${v.cves.length} Faille(s)</button>` : '';
+        const search = `${v.name.toLowerCase()} ${v.version} ${v.cves?v.cves.map(x=>x.id.toLowerCase()).join(' '):''}`;
+        
+        html += `
+        <details data-search="${search}">
+            <summary>
+                <div class="col-prio"><span class="badge p${v.p}">P${v.p}</span></div>
+                <div class="col-comp">${v.name} <small>(v${v.version})</small> ${btn}</div>
+                <div class="col-eol" style="color:var(--p${v.p})">${v.status}</div>
+                <div class="col-short">🎯 ${v.short}</div>
+                <div class="col-long">🚀 ${v.long}</div>
+                <div class="col-impact">${v.impacted.length} Apps ⏷</div>
+            </summary>
+            <div class="content">
+                <div class="parents-grid">${v.impacted.map(n=>`<div class="parent-tag">${n}</div>`).join('')}</div>
+            </div>
+        </details>`;
+    });
+    
+    $('results').innerHTML = html || "<p style='text-align:center; padding:30px; color:var(--text-muted);'>Aucune vulnérabilité.</p>";
+    for(let i=0; i<5; i++) {
+        const box = $(`box-p${i}`);
+        if(box) box.querySelector('.count').innerText = pStats[i];
+    }
+    
+    $('loading').style.display = 'none';
+    
+    if(!ganttFiltersInitialized) { 
+        selectedComponents.clear(); 
+        ganttFiltersInitialized = true; 
+    }
+    
+    renderGantt();
+}
+
+// ============================================================================
+// MOTEUR GANTT (STRICT SUR LES PARENTS)
+// ============================================================================
+function adjustGanttWidth(val) { 
+    document.documentElement.style.setProperty('--gantt-col', val + 'px'); 
+    localStorage.setItem('ganttColumnWidth', val); 
+}
+
+function renderGantt() {
+    const area = $('ganttArea');
+    const filter = $('ganttFilterContainer');
+    
+    if(lastProcessedVulns.size === 0) { 
+        area.innerHTML = "<p style='text-align:center; padding:30px; color:var(--text-muted);'>Générez un SBOM pour afficher le planning des applications parentes.</p>"; 
+        filter.style.display='none'; 
+        return; 
+    }
+
+    // EXTRACTION EXCLUSIVE DES APPLICATIONS PARENTES
+    const pSet = new Set();
+    lastProcessedVulns.forEach(v => { 
+        if(v.impacted) {
+            v.impacted.forEach(a => pSet.add(a)); 
+        }
+    });
+    const parents = Array.from(pSet).sort();
+
+    // Nettoyage des tâches
+    ganttTasks = ganttTasks.filter(t => parents.includes(t.app));
+    
+    if(selectedComponents.size === 0) {
+        parents.forEach(p => selectedComponents.add(p));
+    }
+
+    parents.forEach((p, idx) => { 
+        if(!ganttTasks.find(t=>t.app===p)) {
+            ganttTasks.push({id:'t'+Date.now()+'_'+idx, app:p, name:"Mise à jour planifiée", left:(idx*5)%80, width:15, color:"#d29922"}); 
+        }
+    });
+    safeSet('ganttTasks', JSON.stringify(ganttTasks));
+
+    filter.innerHTML = `
+        <span style="font-size:11px; color:var(--text-muted); margin-right:5px;">Sélection :</span>
+        <details class="gantt-dropdown">
+            <summary>Afficher les applications (${selectedComponents.size}) ⏷</summary>
+            <div class="gantt-dropdown-content">
+                ${parents.map(p => `
+                <label style="display:flex; gap:8px; cursor:pointer; align-items:center; font-size:12px; color:var(--text-main); padding:4px 0;">
+                    <input type="checkbox" ${selectedComponents.has(p)?'checked':''} onchange="toggleGF('${p}',this.checked)" style="accent-color:var(--accent-blue);"> ${p}
+                </label>`).join('')}
+            </div>
+        </details>`;
+    filter.style.display = 'flex';
+
+    const vis = parents.filter(p => selectedComponents.has(p));
+    if(vis.length === 0) { 
+        area.innerHTML = "<p style='text-align:center; padding:30px; color:var(--text-muted);'>Toutes les applications sont masquées.</p>"; 
+        return; 
+    }
+
+    const m = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+    let side = '<div class="gantt-header-row"><div class="gantt-sidebar-header">APPLICATIONS IMPACTÉES</div></div>';
+    let tl = `<div class="gantt-header-row">${m.map(x=>`<div class="gantt-month">${x}</div>`).join('')}</div>`;
+    
+    const tp = ((new Date().getMonth()/12)+(new Date().getDate()/365))*100;
+    tl += `<div class="today-line" style="left:${tp}%;"></div>`;
+
+    vis.forEach(app => {
+        side += `
+            <div class="gantt-app-name" title="${app}">
+                <span>${app}</span>
+                <button class="gantt-add-btn" onclick="addGTask('${app}')">+</button>
+            </div>`;
+        
+        let row = `<div class="gantt-row">`;
+        for(let i=0; i<12; i++) {
+            row += `<div class="gantt-cell"></div>`;
+        }
+        
+        ganttTasks.filter(t => t.app === app).forEach(t => {
+            const r=parseInt(t.color.substr(1,2),16), g=parseInt(t.color.substr(3,2),16), b=parseInt(t.color.substr(5,2),16);
+            const tc = (r*0.299+g*0.587+b*0.114)>128 ? 'black' : 'white';
+            
+            row += `
+                <div class="gantt-task" id="${t.id}" style="left:${t.left}%; width:${t.width}%; background:${t.color}; color:${tc};">
+                    <div class="resizer left"></div>
+                    <span style="cursor:pointer;" onclick="openTEdit('${t.id}')">${t.name}</span>
+                    <div class="resizer right"></div>
+                </div>`;
+        });
+        row += `</div>`; 
+        tl += row;
+    });
+
+    area.innerHTML = `
+        <div class="gantt-wrapper">
+            <div class="gantt-sidebar">${side}</div>
+            <div class="gantt-timeline-wrapper">
+                <div class="gantt-timeline" id="ganttTimeline">${tl}</div>
+            </div>
+        </div>`;
+        
+    initGanttDrag();
+}
+
+function toggleGF(k, c) { 
+    if(c) selectedComponents.add(k); else selectedComponents.delete(k); 
+    renderGantt(); 
+}
+
+function addGTask(app) { 
+    ganttTasks.push({id:'t'+Date.now(), app, name:"Action", left:10, width:10, color:"#58a6ff"}); 
+    safeSet('ganttTasks', JSON.stringify(ganttTasks)); 
+    renderGantt(); 
+}
+
+function openTEdit(id) { 
+    const t=ganttTasks.find(x=>x.id===id); 
+    $('editTaskId').value=id; 
+    $('editTaskName').value=t.name; 
+    $('editTaskColor').value=t.color; 
+    $('taskEditModal').style.display='flex'; 
+}
+
+function saveTaskEdit() { 
+    const t=ganttTasks.find(x=>x.id===$('editTaskId').value); 
+    t.name=$('editTaskName').value; 
+    t.color=$('editTaskColor').value; 
+    safeSet('ganttTasks', JSON.stringify(ganttTasks)); 
+    renderGantt(); 
+    $('taskEditModal').style.display='none'; 
+}
+
+function deleteEditedTask() { 
+    ganttTasks=ganttTasks.filter(x=>x.id!==$('editTaskId').value); 
+    safeSet('ganttTasks', JSON.stringify(ganttTasks)); 
+    renderGantt(); 
+    $('taskEditModal').style.display='none'; 
+}
+
+function initGanttDrag() {
+    const tl = $('ganttTimeline'); 
+    if(!tl) return;
+    
+    let cur=null, mode=null, sx=0, sl=0, sw=0;
+    
+    tl.onmousedown = e => {
+        if(e.target.classList.contains('resizer')) { 
+            cur=e.target.parentElement; 
+            mode=e.target.classList.contains('left')?'l':'r'; 
+        }
+        else if(e.target.classList.contains('gantt-task')) { 
+            cur=e.target; 
+            mode='m'; 
+        }
+        
+        if(cur) { 
+            sx=e.clientX; sl=cur.offsetLeft; sw=cur.offsetWidth; 
+            document.onmousemove=move; document.onmouseup=up; 
+        }
+    };
+    
+    function move(e) {
+        const dx = e.clientX-sx, pw = cur.parentElement.offsetWidth;
+        if(mode==='m') {
+            cur.style.left = Math.max(0, Math.min(pw-sw, sl+dx))/pw*100 + '%';
+        }
+        else if(mode==='r') {
+            cur.style.width = Math.max(20, sw+dx)/pw*100 + '%';
+        }
+        else if(mode==='l') { 
+            let nl=sl+dx, nw=sw-dx; 
+            if(nw>20) { 
+                cur.style.left=(nl/pw*100)+'%'; cur.style.width=(nw/pw*100)+'%'; 
+            } 
+        }
+    }
+    
+    function up() { 
+        if(cur) { 
+            const t=ganttTasks.find(x=>x.id===cur.id); 
+            t.left=parseFloat(cur.style.left); 
+            t.width=parseFloat(cur.style.width); 
+            safeSet('ganttTasks', JSON.stringify(ganttTasks)); 
+        } 
+        document.onmousemove=null; cur=null; 
+    }
+}
+
+function runDemo() {
+    const demo = { components: [], dependencies: [] }; 
+    for(let i=1; i<=3; i++) {
+        const app = `app-${i}`; 
+        demo.components.push({ "bom-ref": app, name: `Service-Parent-${i}`, type: 'application', version: `2.${i}.0` });
+        const tr = `p-${i}`;
+        if(i===1) demo.components.push({ "bom-ref": tr, name: 'lodash', version: '4.17.15', purl: 'pkg:npm/lodash@4.17.15' });
+        if(i===2) demo.components.push({ "bom-ref": tr, name: 'axios', version: '0.21.1', purl: 'pkg:npm/axios@0.21.1' });
+        if(i===3) demo.components.push({ "bom-ref": tr, name: 'spring-boot', version: '3.2.0', purl: 'pkg:maven/spring-boot@3.2.0' });
+        demo.dependencies.push({ ref: app, dependsOn: [tr] });
+    }
+    
+    demo.components.push({ "bom-ref": "app-x", name: "Serveur-Paiement-API", type: "application", version: "1.0.0" });
+    demo.components.push({ "bom-ref": "n1", name: "nodejs", version: "20.5.0", purl: "pkg:npm/nodejs@20.5.0" });
+    demo.components.push({ "bom-ref": "n2", name: "nodejs", version: "22.0.0", purl: "pkg:npm/nodejs@22.0.0" });
+    demo.dependencies.push({ ref: "app-x", dependsOn: ["n1", "n2"] });
+
+    const nid = saveToHistory("demo_systeme.json", demo);
+    demo.components.forEach(c => c._sourceId = nid); 
+    demo.dependencies.forEach(d => d._sourceId = nid);
+    activeWorkspace.components.push(...demo.components); 
+    activeWorkspace.dependencies.push(...demo.dependencies);
+    safeSet('activeWorkspace', JSON.stringify(activeWorkspace));
+    ganttFiltersInitialized = false; selectedComponents.clear(); 
+    processSbom(activeWorkspace);
+}
