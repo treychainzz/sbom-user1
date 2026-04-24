@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>SBOM Control Tower - Édition Multi-Profils & Sync</title>
+    <title>SBOM Control Tower - Édition Finale</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -16,20 +16,17 @@
     <div id="profileModal" class="modal-overlay">
         <div class="modal-content" style="width: 450px; height: auto;">
             <div class="modal-header">
-                <h2>👤 Gestion des Profils</h2>
+                <h2 style="margin:0;">👤 Gestion des Profils</h2>
                 <span class="close-btn" onclick="closeModal('profileModal')">&times;</span>
             </div>
-            <div class="modal-body" style="display:flex; flex-direction:column; gap:15px;">
-                <p style="color:var(--text-muted); font-size:12px; margin:0;">
-                    Créez des profils pour isoler vos différents espaces de travail (historique, tableau de bord, Gantt).
-                </p>
+            <div style="padding: 20px; display:flex; flex-direction:column; gap:15px; background: #0d1117;">
+                <p style="color:var(--text-muted); font-size:12px; margin:0;">Créez des profils pour isoler vos espaces de travail (historique, tableau de bord, Gantt).</p>
                 <div style="display:flex; gap:10px;">
                     <input type="text" id="newProfileName" class="global-search-input" placeholder="Nom du nouveau profil...">
-                    <button onclick="createNewProfile()" class="toolbar-btn" style="background:var(--accent-blue);">Créer</button>
+                    <button onclick="createNewProfile()" class="toolbar-btn" style="background:var(--accent-blue); border:none;">Créer</button>
                 </div>
                 <hr style="border:0; border-top:1px solid var(--border-color); width:100%; margin: 10px 0;">
-                <div id="profileList" style="display:flex; flex-direction:column; gap:10px; max-height: 250px; overflow-y:auto; padding-right: 5px;">
-                    </div>
+                <div id="profileList" style="display:flex; flex-direction:column; gap:10px; max-height: 250px; overflow-y:auto; padding-right: 5px;"></div>
             </div>
         </div>
     </div>
@@ -37,23 +34,23 @@
     <div id="cveModal" class="modal-overlay">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>📁 Audit des Vulnérabilités : <span id="modalCompName" style="color:var(--accent-blue)"></span></h2>
+                <h2 style="margin:0;">📁 Audit des Vulnérabilités : <span id="modalCompName" style="color:var(--accent-blue)"></span></h2>
                 <span class="close-btn" onclick="closeModal('cveModal')">&times;</span>
             </div>
-            <div class="modal-search-header">
-                <input type="text" id="cveSearch" class="modal-search-input" placeholder="🔍 Filtrer par ID ou Description..." onkeyup="filterCVEs()">
+            <div style="padding:15px 20px; background:#090c10; border-bottom:1px solid var(--border-color);">
+                <input type="text" id="cveSearch" class="global-search-input" placeholder="🔍 Filtrer par ID ou Description..." onkeyup="filterCVEs()" style="width: 100%; box-sizing: border-box;">
             </div>
-            <div class="modal-body" id="cveList" style="background: var(--bg-main); padding: 20px;"></div>
+            <div class="modal-body" id="cveList" style="background: var(--bg-main); padding: 20px; flex-grow:1; overflow-y:auto;"></div>
         </div>
     </div>
 
     <div id="taskEditModal" class="modal-overlay">
         <div class="modal-content" style="width: 350px; height: auto;">
             <div class="modal-header">
-                <h2>✏️ Éditer l'action</h2>
+                <h2 style="margin:0;">✏️ Éditer l'action</h2>
                 <span class="close-btn" onclick="closeModal('taskEditModal')">&times;</span>
             </div>
-            <div class="modal-body" style="display:flex; flex-direction:column; gap:15px;">
+            <div style="padding: 20px; background: #0d1117; display:flex; flex-direction:column; gap:15px;">
                 <input type="hidden" id="editTaskId">
                 <div>
                     <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">NOM DE L'ACTION :</label>
@@ -74,13 +71,11 @@
     <div id="proxyModal" class="modal-overlay">
         <div class="modal-content" style="width: 450px; height: auto;">
             <div class="modal-header">
-                <h2>⚙️ Configuration Proxy (CORS)</h2>
+                <h2 style="margin:0;">⚙️ Configuration Proxy (CORS)</h2>
                 <span class="close-btn" onclick="closeModal('proxyModal')">&times;</span>
             </div>
-            <div class="modal-body" style="display:flex; flex-direction:column; gap:15px;">
-                <p style="color:var(--text-muted); font-size:12px; margin:0;">
-                    Contournez les pare-feux d'entreprise. Le tag <strong>{url}</strong> sera remplacé par l'adresse cible de l'API.
-                </p>
+            <div style="padding: 20px; background: #0d1117; display:flex; flex-direction:column; gap:15px;">
+                <p style="color:var(--text-muted); font-size:12px; margin:0;">Contournez les pare-feux d'entreprise. Le tag <strong>{url}</strong> sera remplacé par l'adresse cible de l'API.</p>
                 <select id="proxySelect" class="global-search-input" onchange="handleProxySelection()" style="width:100%; cursor:pointer;">
                     <option value="">Aucun Proxy (Connexion directe)</option>
                     <option value="https://corsproxy.io/?{url}">CorsProxy.io (Recommandé)</option>
@@ -88,7 +83,7 @@
                     <option value="custom">Proxy d'entreprise personnalisé...</option>
                 </select>
                 <div id="customProxyDiv" style="display:none;">
-                    <input type="text" id="proxyCustomInput" class="global-search-input" style="width:100%;" placeholder="https://proxy.intra/?url={url}">
+                    <input type="text" id="proxyCustomInput" class="global-search-input" style="width:100%; margin-top:8px;" placeholder="ex: https://mon-proxy.intra/?url={url}">
                 </div>
                 <div style="display:flex; gap:10px; margin-top: 10px;">
                     <button onclick="testProxyConnection()" class="toolbar-btn" style="flex:1; background:var(--bg-list);">📡 Tester</button>
@@ -99,12 +94,38 @@
         </div>
     </div>
 
-    <div class="sticky-header">
-        <div class="top-bar" style="display:flex; justify-content:space-between; align-items:center;">
-            <div class="title-section">
-                <h1 style="margin: 0 0 5px 0;">🛡️ SBOM Control Tower <span>| Édition Synchronisée</span></h1>
+    <div id="addCompModal" class="modal-overlay">
+        <div class="modal-content" style="width: 400px; height: auto;">
+            <div class="modal-header">
+                <h2 style="margin:0;">➕ Ajouter un Composant</h2>
+                <span class="close-btn" onclick="closeModal('addCompModal')">&times;</span>
             </div>
-            <button onclick="openProfileModal()" class="toolbar-btn profile-btn" title="Gérer les profils de l'application">
+            <div style="padding: 20px; background: #0d1117; display:flex; flex-direction:column; gap:15px;">
+                <p style="color:var(--text-muted); font-size:12px; margin:0;">Ajoutez manuellement une dépendance pour vérifier son statut et ses vulnérabilités.</p>
+                
+                <div id="manualErrorMsg" style="color: var(--p0); font-size: 11px; font-weight: bold; text-align: center; min-height: 15px;"></div>
+
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">NOM DU COMPOSANT :</label>
+                    <input type="text" id="manualCompName" class="global-search-input" style="width:100%; margin-top:8px; box-sizing: border-box;" placeholder="ex: react, @angular/core, spring-boot...">
+                </div>
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">VERSION :</label>
+                    <input type="text" id="manualCompVersion" class="global-search-input" style="width:100%; margin-top:8px; box-sizing: border-box;" placeholder="ex: 18.2.0, 3.2...">
+                </div>
+                <div style="display:flex; gap:10px; margin-top: 5px;">
+                    <button onclick="addManualComponent()" class="toolbar-btn" style="flex:1; background:var(--accent-blue); border-color:var(--accent-blue); color:white;">Analyser</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="sticky-header">
+        <div class="top-bar">
+            <div class="title-section">
+                <h1 style="margin: 0;">🛡️ SBOM Control Tower</h1>
+            </div>
+            <button onclick="openProfileModal()" class="toolbar-btn profile-btn" title="Gérer les profils">
                 👤 Profil : <span id="currentProfileNameDisplay" style="margin-left:5px;">Chargement...</span>
             </button>
         </div>
@@ -119,6 +140,7 @@
         
         <div class="action-toolbar">
             <input type="text" id="globalSearch" class="global-search-input" placeholder="🔍 Rechercher un composant ou CVE..." onkeyup="filterDashboard()">
+            <button onclick="document.getElementById('addCompModal').style.display='flex'" class="toolbar-btn" style="color:var(--accent-blue); border-color:var(--accent-blue); background:var(--bg-card);">➕ Manuel</button>
             <button onclick="forceUpdateAnalysis()" class="toolbar-btn" style="background:var(--bg-card);">🔄 Maj API</button>
             <button onclick="document.getElementById('proxyModal').style.display='flex'" class="toolbar-btn" style="background:var(--bg-card);">⚙️ Proxy</button>
             <button onclick="clearWorkspace()" class="toolbar-btn clear-btn">🧹 Vider le profil</button>
@@ -140,10 +162,10 @@
             <h3 class="widget-title">🛡️ Inventaire des Composants & Vulnérabilités</h3>
             <div class="table-header">
                 <div class="col-prio">Priorité</div>
-                <div class="col-comp">Composant Parent</div>
-                <div class="col-eol">Santé / Support</div>
-                <div class="col-short">Cible Court T.</div>
-                <div class="col-long">Cible Long T.</div>
+                <div class="col-comp">Composant Actuel</div>
+                <div class="col-eol">EOL (Actuel)</div>
+                <div class="col-long">Version Cible</div>
+                <div class="col-support">Statut Cible</div>
                 <div class="col-impact">Apps Impactées</div>
             </div>
             <div id="results">
@@ -159,7 +181,7 @@
                         <span style="font-size:11px; font-weight:bold; color:var(--text-muted);">ZOOM :</span>
                         <input type="range" id="ganttZoom" min="50" max="250" value="100" oninput="adjustGanttWidth(this.value)" style="cursor:pointer; width:100px;">
                     </div>
-                    <button onclick="exportGanttToCSV()" class="toolbar-btn" style="height:30px; font-size:11px; background:var(--accent-blue); border-color:var(--accent-blue);">📊 Export Gantt</button>
+                    <button onclick="exportGanttToCSV()" class="toolbar-btn" style="height:30px; font-size:11px; background:var(--accent-blue); border:none;">📊 Export Gantt</button>
                 </div>
             </div>
             <div id="ganttFilterContainer" class="gantt-controls" style="display:none;"></div>
