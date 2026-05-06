@@ -31,7 +31,7 @@ OSBOM est un projet purement statique (Vanilla JS, HTML, CSS). Il n'y a aucune d
    ```bash
    git clone [https://github.com/VOTRE_NOM/osbom.git](https://github.com/VOTRE_NOM/osbom.git)
 
-   Lancer l'application :
+Lancer l'application :
 Ouvrez simplement le fichier index.html dans n'importe quel navigateur web moderne (Chrome, Edge, Firefox, Safari).
 
 Comment utiliser OSBOM ?
