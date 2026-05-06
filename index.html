@@ -2,17 +2,20 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>SBOM Control Tower - Édition Finale</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSBOM Control Tower - Édition Finale</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
+    <!-- L'ÉCRAN NOIR DE CHARGEMENT EST RESTAURÉ -->
     <div id="loading">
         <div class="spinner"></div>
-        <h2 id="loadMsg" style="margin-top:20px;">Analyse Cyber-Résilience...</h2>
+        <h2 id="loadMsg" style="margin-top:20px; color: white;">Analyse Cyber-Résilience...</h2>
         <div class="progress-container"><div id="progressBar"></div></div>
     </div>
 
+    <!-- MODAL : GESTION DES PROFILS -->
     <div id="profileModal" class="modal-overlay">
         <div class="modal-content" style="width: 450px; height: auto;">
             <div class="modal-header">
@@ -20,7 +23,7 @@
                 <span class="close-btn" onclick="closeModal('profileModal')">&times;</span>
             </div>
             <div style="padding: 20px; display:flex; flex-direction:column; gap:15px; background: #0d1117;">
-                <p style="color:var(--text-muted); font-size:12px; margin:0;">Créez des profils pour isoler vos espaces de travail (historique, tableau de bord, Gantt).</p>
+                <p style="color:var(--text-muted); font-size:12px; margin:0;">Créez des profils pour isoler vos espaces de travail (historique, tableau de bord).</p>
                 <div style="display:flex; gap:10px;">
                     <input type="text" id="newProfileName" class="global-search-input" placeholder="Nom du nouveau profil...">
                     <button onclick="createNewProfile()" class="toolbar-btn" style="background:var(--accent-blue); border:none;">Créer</button>
@@ -31,6 +34,48 @@
         </div>
     </div>
 
+    <!-- MODAL : CRÉATION DE RÈGLE EOL (APPRENTISSAGE) -->
+    <div id="overrideModal" class="modal-overlay">
+        <div class="modal-content" style="width: 450px; height: auto;">
+            <div class="modal-header">
+                <h2 id="overrideTitle" style="margin:0; color:var(--accent-blue);">Règle EOL</h2>
+                <span class="close-btn" onclick="closeModal('overrideModal')">&times;</span>
+            </div>
+            <div style="padding: 20px; display:flex; flex-direction:column; gap:15px; background: #0d1117;">
+                <p style="font-size:0.85em; color:var(--text-muted); margin:0;">Créez une règle de fin de vie. Elle sera sauvegardée localement pour tous les futurs imports.</p>
+                
+                <input type="hidden" id="overrideSlug">
+                
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">CYCLE / VERSION MAJEURE :</label>
+                    <input type="text" id="overrideCycle" class="global-search-input" style="width:100%; margin-top:8px;" placeholder="Ex: 4 ou 4.17">
+                </div>
+                
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">DATE D'EXPIRATION (EOL) :</label>
+                    <input type="date" id="overrideDate" class="global-search-input" style="width:100%; margin-top:8px;" title="Laissez vide si supporté indéfiniment">
+                </div>
+                
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">LIEN DE LA SOURCE (PREUVE) :</label>
+                    <input type="text" id="overrideLink" class="global-search-input" style="width:100%; margin-top:8px;" placeholder="https://lodash.com/version-support">
+                </div>
+
+                <!-- LE NOUVEAU CHAMP EST ICI -->
+                <div>
+                    <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">VERSION CIBLE / RECOMMANDÉE (Optionnel) :</label>
+                    <input type="text" id="overrideTargetVersion" class="global-search-input" style="width:100%; margin-top:8px;" placeholder="Ex: 4.17.21 ou LATEST">
+                </div>
+                
+                <div style="display:flex; gap:10px; margin-top: 5px;">
+                    <button class="toolbar-btn" style="flex:1; background:var(--bg-list);" onclick="closeModal('overrideModal')">Annuler</button>
+                    <button class="toolbar-btn" style="flex:1; background:#238636; border-color:#2ea043; color:white;" onclick="saveCustomOverride()">Valider la source</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL : LISTE DES CVE -->
     <div id="cveModal" class="modal-overlay">
         <div class="modal-content">
             <div class="modal-header">
@@ -38,36 +83,13 @@
                 <span class="close-btn" onclick="closeModal('cveModal')">&times;</span>
             </div>
             <div style="padding:15px 20px; background:#090c10; border-bottom:1px solid var(--border-color);">
-                <input type="text" id="cveSearch" class="global-search-input" placeholder="🔍 Filtrer par ID ou Description..." onkeyup="filterCVEs()" style="width: 100%; box-sizing: border-box;">
+                <input type="text" id="cveSearch" class="global-search-input" placeholder="🔍 Filtrer par ID ou Description..." oninput="filterCVEs()" style="width: 100%; box-sizing: border-box;">
             </div>
             <div class="modal-body" id="cveList" style="background: var(--bg-main); padding: 20px; flex-grow:1; overflow-y:auto;"></div>
         </div>
     </div>
 
-    <div id="taskEditModal" class="modal-overlay">
-        <div class="modal-content" style="width: 350px; height: auto;">
-            <div class="modal-header">
-                <h2 style="margin:0;">✏️ Éditer l'action</h2>
-                <span class="close-btn" onclick="closeModal('taskEditModal')">&times;</span>
-            </div>
-            <div style="padding: 20px; background: #0d1117; display:flex; flex-direction:column; gap:15px;">
-                <input type="hidden" id="editTaskId">
-                <div>
-                    <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">NOM DE L'ACTION :</label>
-                    <input type="text" id="editTaskName" class="global-search-input" style="width:100%; margin-top:8px;">
-                </div>
-                <div>
-                    <label style="font-size:11px; font-weight:bold; color:var(--text-muted);">COULEUR :</label>
-                    <input type="color" id="editTaskColor" style="width:100%; height:45px; border:1px solid var(--border-color); border-radius:6px; background:var(--bg-card); cursor:pointer; margin-top:8px;">
-                </div>
-                <div style="display:flex; gap:10px; margin-top: 10px;">
-                    <button onclick="saveTaskEdit()" class="toolbar-btn" style="flex:1; background:var(--accent-blue); border-color:var(--accent-blue);">💾 Valider</button>
-                    <button onclick="deleteEditedTask()" class="toolbar-btn" style="flex:1; background:rgba(255,68,68,0.1); color:var(--p0); border-color:var(--p0);">🗑️ Supprimer</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
+    <!-- MODAL : CONFIGURATION DU PROXY -->
     <div id="proxyModal" class="modal-overlay">
         <div class="modal-content" style="width: 450px; height: auto;">
             <div class="modal-header">
@@ -94,6 +116,7 @@
         </div>
     </div>
 
+    <!-- MODAL : AJOUT MANUEL D'UN COMPOSANT -->
     <div id="addCompModal" class="modal-overlay">
         <div class="modal-content" style="width: 400px; height: auto;">
             <div class="modal-header">
@@ -120,16 +143,22 @@
         </div>
     </div>
 
+    <!-- HEADER COLLÉ EN HAUT -->
     <div class="sticky-header">
         <div class="top-bar">
             <div class="title-section">
-                <h1 style="margin: 0;">🛡️ SBOM Control Tower</h1>
+                <h1 style="margin: 0; font-size: 1.5rem; display: flex; align-items: center; gap: 10px;">
+                    🛡️ OSBOM - Projet TITAN
+                    <span style="font-size: 0.5em; background: var(--accent-blue); padding: 3px 8px; border-radius: 12px; color: #000; font-weight: bold;">v1.0</span>
+                </h1>
             </div>
-            <button onclick="openProfileModal()" class="toolbar-btn profile-btn" title="Gérer les profils">
+            <button onclick="openProfileModal()" class="toolbar-btn profile-btn" title="Gérer les profils" style="position: relative;">
                 👤 Profil : <span id="currentProfileNameDisplay" style="margin-left:5px;">Chargement...</span>
+                <span id="approbationBadge" style="display:none; position:absolute; top:-5px; right:-5px; background:var(--p0); color:white; font-size:10px; padding:2px 6px; border-radius:10px; font-weight:bold; box-shadow:0 0 5px rgba(0,0,0,0.5);">0</span>
             </button>
         </div>
         
+        <!-- STATISTIQUES SLA -->
         <div class="sla-grid">
             <div id="box-p0" class="sla-box"><h4>CRITIQUE</h4><span class="count">0</span><span class="sla-subtitle">Date dépassée</span></div>
             <div id="box-p1" class="sla-box"><h4>URGENT</h4><span class="count">0</span><span class="sla-subtitle">&lt; 3 Mois</span></div>
@@ -137,9 +166,9 @@
             <div id="box-p3" class="sla-box"><h4>MOYEN</h4><span class="count">0</span><span class="sla-subtitle">&lt; 1 An</span></div>
             <div id="box-p4" class="sla-box"><h4>SAIN</h4><span class="count">0</span><span class="sla-subtitle">&gt; 1 An</span></div>
         </div>
-        
+
         <div class="action-toolbar">
-            <input type="text" id="globalSearch" class="global-search-input" placeholder="🔍 Rechercher un composant ou CVE..." onkeyup="filterDashboard()">
+            <input type="text" id="globalSearch" class="search-bar" placeholder="Rechercher un composant, une version ou un numéro CVE..." oninput="filterDashboard()">
             <button onclick="document.getElementById('addCompModal').style.display='flex'" class="toolbar-btn" style="color:var(--accent-blue); border-color:var(--accent-blue); background:var(--bg-card);">➕ Manuel</button>
             <button onclick="forceUpdateAnalysis()" class="toolbar-btn" style="background:var(--bg-card);">🔄 Maj API</button>
             <button onclick="document.getElementById('proxyModal').style.display='flex'" class="toolbar-btn" style="background:var(--bg-card);">⚙️ Proxy</button>
@@ -152,47 +181,49 @@
         </div>
     </div>
 
+    <!-- ZONE DE CONTENU DÉFILABLE (WIDGETS REPLIABLES) -->
     <div class="scrollable-content">
-        <div class="dashboard-widget">
-            <h3 class="widget-title">📜 Bibliothèque des Imports (Profil Actuel)</h3>
+        
+        <details class="dashboard-widget" open>
+            <summary class="widget-title">📜 Bibliothèque des Imports (Profil Actuel)</summary>
             <div id="historyList"></div>
-        </div>
+        </details>
 
-        <div class="dashboard-widget">
-            <h3 class="widget-title">🛡️ Inventaire des Composants & Vulnérabilités</h3>
-            <div class="table-header">
-                <div class="col-prio">Priorité</div>
-                <div class="col-comp">Composant Actuel</div>
-                <div class="col-eol">EOL (Actuel)</div>
-                <div class="col-long">Version Cible</div>
-                <div class="col-support">Statut Cible</div>
-                <div class="col-impact">Apps Impactées</div>
-            </div>
-            <div id="results">
-                <p style='text-align:center; padding:30px; color:var(--text-muted);'>Importez un fichier SBOM pour commencer.</p>
-            </div>
-        </div>
-
-        <div class="dashboard-widget" style="margin-bottom: 50px;">
-            <div class="widget-title">
-                <div>📊 Planification de Remédiation (Année N)</div>
-                <div style="display:flex; align-items:center; gap:15px;">
-                    <div style="display:flex; align-items:center; gap:8px; background:var(--bg-list); padding:5px 12px; border-radius:6px; border:1px solid var(--border-color);">
-                        <span style="font-size:11px; font-weight:bold; color:var(--text-muted);">ZOOM :</span>
-                        <input type="range" id="ganttZoom" min="50" max="250" value="100" oninput="adjustGanttWidth(this.value)" style="cursor:pointer; width:100px;">
-                    </div>
-                    <button onclick="exportGanttToCSV()" class="toolbar-btn" style="height:30px; font-size:11px; background:var(--accent-blue); border:none;">📊 Export Gantt</button>
+        <details class="dashboard-widget" open>
+            <summary class="widget-title" style="color: var(--p3);">
+                <span>🛠️ Apprentissage Autonome (Composants Inconnus)</span>
+            </summary>
+            <div>
+                <p style="color:var(--text-muted); font-size:11px; margin-top:-5px; margin-bottom:15px;">
+                    Ces composants n'existent pas dans la base de données EOL officielle. Définissez une règle pour les retirer de cette liste.
+                </p>
+                <div id="approbationList">
+                    <p style='text-align:center; color:var(--text-muted); padding:20px;'>Aucun composant en attente.</p>
                 </div>
             </div>
-            <div id="ganttFilterContainer" class="gantt-controls" style="display:none;"></div>
-            <div id="ganttArea">
-                <p style='text-align:center; color:var(--text-muted); padding:30px; border:1px solid var(--border-color); border-radius:6px;'>
-                    Générez un SBOM pour afficher le planning des composants parents.
-                </p>
+        </details>
+
+        <!-- WIDGET 3 : INVENTAIRE PRINCIPAL -->
+        <details class="dashboard-widget" open>
+            <summary class="widget-title">🛡️ Inventaire des Composants & Vulnérabilités</summary>
+            <div>
+                <div class="dashboard-header">
+                    <div class="col-prio">Prio</div>
+                    <div class="col-comp">Composant Actuel</div>
+                    <div class="col-eol">EOL (Actuel)</div>
+                    <div class="col-long">Version Cible</div>
+                    <div class="col-support">Statut Cible</div>
+                    <div class="col-impact">Apps</div>
+                </div>
+                <div id="results">
+                    <p style='text-align:center; padding:30px; color:var(--text-muted);'>Importez un fichier SBOM pour commencer.</p>
+                </div>
             </div>
-        </div>
+        </details>
+
     </div>
 
+    <!-- Script de l'application -->
     <script src="script.js"></script>
 </body>
 </html>
