@@ -94,17 +94,35 @@ details.dashboard-widget summary.widget-title::-webkit-details-marker { display:
    ========================================================================== */
 
 /* Header et Lignes partagent EXACTEMENT la même structure */
+/* ==========================================================================
+   ALIGNEMENT STRICT DU TABLEAU (AVEC COLONNE TYPE)
+   ========================================================================== */
 .dashboard-header, 
 #results summary {
     display: grid !important;
     width: 100%;
-    min-width: var(--table-min-width); /* Force une largeur minimale pour éviter l'écrasement */
-    /* Dimensions : 70px (Prio) | 25% (Composant) | 20% (EOL) | 20% (Version) | 20% (Statut) | 80px (Apps) */
-    grid-template-columns: 70px 25% 20% 20% 20% 80px; 
-    gap: 10px; /* Espace fixe entre les colonnes */
+    /* On passe à 1100px pour respirer avec la 7ème colonne */
+    min-width: 1100px; 
+    /* Nouvelles proportions : Prio | Comp | Type | EOL | Cible | Support | Apps */
+    grid-template-columns: 70px 22% 10% 16% 18% 16% 80px; 
+    gap: 10px;
     align-items: center;
     box-sizing: border-box;
     margin: 0;
+}
+
+/* Le petit badge esthétique pour le type */
+.badge-type {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    font-weight: bold;
+    display: inline-block;
+    white-space: nowrap;
 }
 
 .dashboard-header {
