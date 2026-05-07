@@ -35,8 +35,11 @@ const escapeHTML = str => {
 let appProfiles = [];
 let currentProfileId = null;
 let sbomHistory = [];
+// Liste des composants à ignorer (pour nettoyer l'apprentissage)
+let ignoredSlugs = JSON.parse(localStorage.getItem('titan_ignored_slugs')) || [];
 let activeWorkspace = { components: [], dependencies: [] };
 window.lastProcessedVulns = new Map();
+window.familyCVEs = new Map();
 const cache = {};
 let currentProxyUrl = "https://corsproxy.io/?{url}";
 let currentCVEs = [];
@@ -171,9 +174,16 @@ function loadProfileContext() {
 }
 
 function doFetch(url, opts) { 
-    if (url.includes('endoflife.date') || url.includes('api.osv.dev')) {
+    // Liste VIP : Ces registres acceptent les connexions directes. On zappe le proxy pour éviter les blocages de spam !
+    if (url.includes('endoflife.date') || 
+        url.includes('api.osv.dev') ||
+        url.includes('registry.npmjs.org') ||
+        url.includes('pypi.org') ||
+        url.includes('repo.packagist.org')) {
         return fetch(url, opts);
     }
+    
+    // Pour le reste, on passe par le proxy
     if(!currentProxyUrl) return fetch(url, opts); 
     if(currentProxyUrl.includes('{url}')) return fetch(currentProxyUrl.replace('{url}', encodeURIComponent(url)), opts); 
     return fetch(currentProxyUrl + url, opts); 
@@ -207,13 +217,16 @@ async function testProxyConnection() {
 // OMNI-DÉTECTION DES REGISTRES
 // ============================================================================
 async function getRegistryInfo(name, version) {
+    // Nettoyage vital : on retire un éventuel "v" devant la version pour que NPM comprenne
+    const cleanVer = String(version).trim().replace(/^v/i, '');
+
     if (name.includes('/') && !name.startsWith('@')) {
         try {
             const res = await doFetch(`https://repo.packagist.org/p2/${name}.json`);
             if (res.ok) {
                 const data = await res.json();
                 const versions = data.packages?.[name] || [];
-                const match = versions.find(v => v.version === version || v.version.startsWith(version + '.') || v.version.startsWith(version + '-'));
+                const match = versions.find(v => v.version === cleanVer || v.version.startsWith(cleanVer + '.') || v.version.startsWith(cleanVer + '-'));
                 if (match) return { found: true, correctedVersion: match.version, latest: versions[0]?.version, releaseDate: match.time, ecosystem: 'Packagist', link: `https://packagist.org/packages/${name}` };
             }
         } catch(e) {}
@@ -224,7 +237,7 @@ async function getRegistryInfo(name, version) {
         if (res.ok) {
             const data = await res.json();
             const versions = Object.keys(data.releases);
-            const match = versions.find(v => v === version || v.startsWith(version + '.') || v.startsWith(version + '-'));
+            const match = versions.find(v => v === cleanVer || v.startsWith(cleanVer + '.') || v.startsWith(cleanVer + '-'));
             if (match) return { found: true, correctedVersion: match, latest: data.info.version, releaseDate: data.releases[match]?.[0]?.upload_time, ecosystem: 'PyPI', link: `https://pypi.org/project/${name}/` };
         }
     } catch(e) {}
@@ -234,7 +247,7 @@ async function getRegistryInfo(name, version) {
         if (res.ok) {
             const data = await res.json();
             const versions = Object.keys(data.versions || {});
-            const match = versions.sort().reverse().find(v => v === version || v.startsWith(version + '.') || v.startsWith(version + '-'));
+            const match = versions.sort().reverse().find(v => v === cleanVer || v.startsWith(cleanVer + '.') || v.startsWith(cleanVer + '-'));
             if (match) return { found: true, correctedVersion: match, latest: data['dist-tags']?.latest, releaseDate: data.time?.[match], ecosystem: 'npm', link: `https://www.npmjs.com/package/${name}` };
         }
     } catch(e) {}
@@ -246,8 +259,10 @@ async function getRegistryInfo(name, version) {
 // MOTEUR D'ANALYSE (DATES ET STATUTS)
 // ============================================================================
 function isVersionInCycle(version, cycle) {
-    const vStr = String(version);
-    const cStr = String(cycle);
+    // Nettoyage ultra-agressif : on retire le "v" au début pour que "v4.17" et "4" matchent parfaitement
+    const vStr = String(version).toLowerCase().replace(/^v/, '').trim();
+    const cStr = String(cycle).toLowerCase().replace(/^v/, '').trim();
+    
     return vStr === cStr || vStr.startsWith(cStr + '.') || vStr.startsWith(cStr + '-');
 }
 
@@ -389,32 +404,52 @@ function renderApprobationTab() {
     const container = $('approbationList');
     const badge = $('approbationBadge'); 
     
+    // On filtre les orphelins pour ne pas afficher ceux qui sont ignorés
+    const filteredOrphans = new Map();
+    pendingOrphans.forEach((data, slug) => {
+        if (!ignoredSlugs.includes(slug)) {
+            filteredOrphans.set(slug, data);
+        }
+    });
+
     if (badge) {
-        badge.innerText = pendingOrphans.size;
-        badge.style.display = pendingOrphans.size > 0 ? 'inline-block' : 'none';
+        badge.innerText = filteredOrphans.size;
+        badge.style.display = filteredOrphans.size > 0 ? 'inline-block' : 'none';
     }
 
     if (!container) return;
 
-    if (pendingOrphans.size === 0) {
-        container.innerHTML = "<p style='text-align:center; color:var(--p4); padding:20px;'>✅ Aucun composant orphelin. Votre base de connaissances est à jour.</p>";
+    if (filteredOrphans.size === 0) {
+        container.innerHTML = "<p style='text-align:center; color:var(--p4); padding:20px;'>✅ Aucun composant en attente.</p>";
         return;
     }
 
     let html = "";
-    pendingOrphans.forEach((data, slug) => {
+    filteredOrphans.forEach((data, slug) => {
         html += `
         <div style="background:var(--bg-card); border:1px solid var(--border-color); padding:15px; margin-bottom:10px; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
             <div>
                 <strong style="color:var(--text-main); font-size:1.1em;">${data.name}</strong> <span style="color:var(--text-muted); font-size:0.9em;">(v${data.version})</span>
                 <div style="font-size:0.8em; color:var(--accent-blue); margin-top:4px;">Écosystème: ${data.ecosystem || 'Inconnu'}</div>
             </div>
-            <button class="btn-sm btn-sm-primary" onclick="openOverrideModal('${slug}', '${data.name}')">Définir le cycle EOL</button>
+            <div style="display:flex; gap:10px;">
+                <button class="btn-sm" style="background:transparent; border-color:var(--text-muted); color:var(--text-muted);" onclick="ignoreComponent('${slug}')">Ignorer</button>
+                <button class="btn-sm btn-sm-primary" onclick="openOverrideModal('${slug}', '${data.name}')">Définir EOL</button>
+            </div>
         </div>`;
     });
     
     container.innerHTML = html;
 }
+
+// Nouvelle fonction pour mettre en liste noire un composant interne/fantôme
+window.ignoreComponent = function(slug) {
+    if (!ignoredSlugs.includes(slug)) {
+        ignoredSlugs.push(slug);
+        localStorage.setItem('titan_ignored_slugs', JSON.stringify(ignoredSlugs));
+        renderApprobationTab(); // Rafraîchit la liste immédiatement
+    }
+};
 
 function openOverrideModal(slug, name) {
     $('overrideSlug').value = slug;
@@ -431,21 +466,33 @@ function saveCustomOverride() {
 
     if (!slug) return;
 
-    // 1. On sauvegarde directement dans la bonne variable globale
-    customEolDb[slug] = [{
+    // 1. On met à jour la vraie variable globale (sans "window.")
+    customEolDb[slug] = {
         cycle: cycle || "1.0",
         eol: date || false,
         link: link || "",
         targetVersion: targetVersion || ""
-    }];
+    };
 
-    // 2. On utilise la BONNE clé d'enregistrement
+    // 2. On sauvegarde avec LA BONNE CLÉ (celle lue au démarrage)
     localStorage.setItem('titan_custom_eol', JSON.stringify(customEolDb));
     
     closeModal('overrideModal');
     
-    // 3. On force le rechargement
+    // 3. On force le rafraîchissement
     forceUpdateAnalysis(); 
+}
+
+// Traducteur des types SBOM (CycloneDX / SPDX)
+function translateType(type) {
+    const t = (type || '').toLowerCase();
+    if (t === 'library') return 'Librairie';
+    if (t === 'framework') return 'Framework';
+    if (t === 'application') return 'Application';
+    if (t === 'operating-system') return 'OS';
+    if (t === 'container') return 'Conteneur';
+    if (t === 'device') return 'Matériel';
+    return 'Librairie'; // Type par défaut
 }
 
 // ============================================================================
@@ -457,18 +504,26 @@ async function getSecurityData(name, version) {
 
     let res = { p: 4, currentEol: "Inconnu", supportedCycles: [], sourceLink: "#", cves: [] };
     const originalName = name.toLowerCase();
-    
     const slug = getEolSlug(originalName);
+
+    // --- NOUVEAUTÉ : VÉRIFICATION DE LA LISTE NOIRE (COMPOSANTS IGNORÉS) ---
+    if (typeof ignoredSlugs !== 'undefined' && ignoredSlugs.includes(slug)) {
+        res.currentEol = "Interne / Ignoré";
+        res.p = 4; // On le met en "Sain" pour qu'il ne pollue pas les statistiques P0/P1
+        return cache[k] = res; // On arrête l'analyse ici, pas besoin d'interroger le réseau !
+    }
+
     let allCycles = null;
     let isCustomSource = false;
 
-    // 1. Vérification dans la base de connaissances manuelle
+    // 1. Recherche dans la base de données personnalisée
     if (customEolDb[slug]) {
-        allCycles = customEolDb[slug];
+        // Sécurité : On s'assure que la règle est bien dans un tableau pour pouvoir faire un .find() plus tard
+        allCycles = Array.isArray(customEolDb[slug]) ? customEolDb[slug] : [customEolDb[slug]];
         isCustomSource = true;
-        res.sourceLink = allCycles[0].link || "#"; 
+        res.sourceLink = allCycles[0].link || allCycles[0].sourceLink || "#"; 
     } 
-    // 2. Vérification sur l'API officielle
+    // 2. Sinon, recherche dans l'API officielle
     else if (validEolSlugs.size === 0 || validEolSlugs.has(slug)) {
         try {
             const eolResponse = await doFetch(`https://endoflife.date/api/${slug}.json`);
@@ -479,12 +534,11 @@ async function getSecurityData(name, version) {
         } catch (e) {}
     }
 
-    // 3. Récupération des infos registre (NPM, Maven, etc.)
+    // 3. Fallback Registry (NPM, PyPI, etc.) pour deviner l'âge si inconnu
     const regInfo = await getRegistryInfo(originalName, version);
 
-    // 4. L'AFFECTATION STRICTE (A, B ou C)
+    // --- CALCUL DU CYCLE EOL ---
     if (allCycles) {
-        // SCÉNARIO A : Connu par API ou par Règle Manuelle
         const currentCycle = allCycles.find(x => isVersionInCycle(version, x.cycle));
         if (currentCycle) {
             const phase = evaluateSupportPhase(currentCycle, isCustomSource);
@@ -494,29 +548,31 @@ async function getSecurityData(name, version) {
             res.currentEol = "Version Inconnue"; res.p = 0;
         }
         res.supportedCycles = allCycles.filter(c => evaluateSupportPhase(c, isCustomSource).isAlive);
-        
-    } else if (regInfo.found && regInfo.releaseDate && regInfo.latest) {
-        // SCÉNARIO B : Fallback Registre (NPM/Maven a trouvé le composant)
-        // -> Il est connu grâce au Fallback. On NE LE MET PAS dans l'apprentissage.
-        res.sourceLink = regInfo.link;
-        const age = Math.ceil((new Date() - new Date(regInfo.releaseDate)) / 86400000);
-        if (age > 1460) { res.p=0; res.currentEol="Obsolète (>4 ans)"; }
-        else if (age > 1095) { res.p=2; res.currentEol="Vieux (>3 ans)"; }
-        else if (age > 730) { res.p=3; res.currentEol="Vieillissant (>2 ans)"; }
-        else { res.p=4; res.currentEol="Récent (<2 ans)"; }
-        
-        res.supportedCycles = [{ latest: regInfo.latest, isRegistryFallback: true, registryName: regInfo.ecosystem }];
-        
     } else {
-        // SCÉNARIO C : VRAIMENT INCONNU
-        // -> Seulement ici, on l'envoie dans le Sas d'Apprentissage
+        // S'il n'est ni connu, ni dans la base custom, ni ignoré : il va dans le Sas d'Apprentissage
         if (!pendingOrphans.has(slug)) {
             pendingOrphans.set(slug, { name: originalName, version: version, ecosystem: regInfo.ecosystem || 'Inconnu' });
             if (typeof renderApprobationTab === 'function') renderApprobationTab();
         }
     }
 
-    // 5. Recherche des CVEs (OSV API)
+    // --- APPLICATION DU FALLBACK SI TOUT LE RESTE A ÉCHOUÉ ---
+    if (res.currentEol === "Inconnu" && regInfo.found) {
+        res.sourceLink = regInfo.link;
+        const { releaseDate, latest, ecosystem } = regInfo;
+        
+        if (releaseDate && latest) {
+            const age = Math.ceil((new Date() - new Date(releaseDate)) / 86400000);
+            if (age > 1460) { res.p=0; res.currentEol="Obsolète (>4 ans)"; }
+            else if (age > 1095) { res.p=2; res.currentEol="Vieux (>3 ans)"; }
+            else if (age > 730) { res.p=3; res.currentEol="Vieillissant (>2 ans)"; }
+            else { res.p=4; res.currentEol="Récent (<2 ans)"; }
+            
+            res.supportedCycles = [{ latest: latest, isRegistryFallback: true, registryName: ecosystem }];
+        }
+    }
+
+    // --- 4. RECHERCHE DES VULNÉRABILITÉS (API OSV) ---
     try {
         const osvPayload = { version, package: { name: originalName, ecosystem: regInfo.ecosystem || 'npm' } };
         const osv = await doFetch('https://api.osv.dev/v1/query', { method:'POST', body: JSON.stringify(osvPayload) });
@@ -524,7 +580,7 @@ async function getSecurityData(name, version) {
         if (osv.ok) {
             const j = await osv.json();
             if (j.vulns) { 
-                res.p = 0; 
+                res.p = 0; // S'il y a des failles, la priorité devient P0 (Critique) immédiatement !
                 res.cves = j.vulns.map(v => {
                     let exactScore = "N/A";
                     let vector = null;
@@ -656,26 +712,34 @@ async function addManualComponent() {
     processSbom(activeWorkspace);
 }
 
-function deleteManualComponent(event, refId) {
-    event.stopPropagation();
-    if (!confirm("Voulez-vous vraiment supprimer ce composant ?")) return;
+// ============================================================================
+// SUPPRESSION UNIVERSELLE D'UN COMPOSANT (Nettoyage de faux-positifs)
+// ============================================================================
+window.deleteComponent = function(event, refId) {
+    event.stopPropagation(); // Empêche d'ouvrir ou fermer la ligne du tableau
+    
+    if (!confirm("Voulez-vous vraiment ignorer ce composant ? Il sera retiré du tableau de bord.")) return;
 
+    // 1. On le retire de la liste principale des composants
     activeWorkspace.components = activeWorkspace.components.filter(c => c['bom-ref'] !== refId);
-    const appDeps = activeWorkspace.dependencies.find(d => d.ref === "manual-app-wrapper");
-    if (appDeps && appDeps.dependsOn) {
-        appDeps.dependsOn = appDeps.dependsOn.filter(r => r !== refId);
-    }
+    
+    // 2. On le retire de TOUTES les listes de dépendances (pour ne pas casser l'arbre)
+    activeWorkspace.dependencies.forEach(d => {
+        if (d.dependsOn) {
+            d.dependsOn = d.dependsOn.filter(r => r !== refId);
+        }
+    });
 
+    // 3. On sauvegarde le profil nettoyé et on relance l'affichage
     localStorage.setItem(`${currentProfileId}_activeWorkspace`, JSON.stringify(activeWorkspace));
     processSbom(activeWorkspace);
-}
+};
 
 // ============================================================================
-// TRAITEMENT DU WORKSPACE ET GÉNÉRATION DU DASHBOARD
+// TRAITEMENT DU WORKSPACE ET GÉNÉRATION DU DASHBOARD (COMPLET & FINAL)
 // ============================================================================
 async function processSbom(workspace) {
     if ($('loading')) $('loading').style.display = 'flex';
-    
     
     const comps = workspace.components || [];
     const deps = workspace.dependencies || [];
@@ -689,20 +753,25 @@ async function processSbom(workspace) {
         (d.dependsOn || []).forEach(r => dMap.get(d.ref).add(r)); 
     });
 
+    // 1. EXTRACTION DES COMPOSANTS UNIQUES (ON GARDE LES VRAIS NOMS POUR LES REQUÊTES)
     const unique = []; 
     const seen = new Set();
     comps.forEach(c => { 
         if (c.type !== 'application') {
-            const k = `${c.name.toLowerCase()}|${c.version}`; 
-            if (!seen.has(k)) { unique.push(c); seen.add(k); } 
+            const rawName = c.name.toLowerCase().trim();
+            const version = String(c.version).trim();
+            const k = `${rawName}|${version}`; 
+            
+            if (!seen.has(k)) { 
+                unique.push({ ...c, originalName: rawName, version: version }); 
+                seen.add(k); 
+            } 
         }
     });
     
     window.lastProcessedVulns.clear();
-    pendingOrphans.clear();
-    
-    if (typeof renderApprobationTab === 'function') renderApprobationTab(); // Met à jour l'affichage
 
+    // 2. ANALYSE SÉCURITÉ (AVEC LES VRAIS NOMS POUR NE RIEN RATER SUR NPM/OSV)
     const BATCH_SIZE = 15;
     for (let i = 0; i < unique.length; i += BATCH_SIZE) {
         const batch = unique.slice(i, i + BATCH_SIZE);
@@ -710,13 +779,15 @@ async function processSbom(workspace) {
             const percent = Math.round(((i + batch.length) / unique.length) * 100);
             $('progressBar').style.width = percent + '%';
         }
-        await Promise.all(batch.map(c => getSecurityData(c.name, c.version)));
+        // On interroge les API avec l'originalName
+        await Promise.all(batch.map(c => getSecurityData(c.originalName, c.version)));
         await new Promise(resolve => requestAnimationFrame(resolve));
         if (i + BATCH_SIZE < unique.length) {
             await new Promise(r => setTimeout(r, 400)); 
         }
     }
 
+    // 3. RECONSTRUCTION ET SUPER-REGROUPEMENT VISUEL DES DONNÉES
     const apps = comps.filter(c => c.type === 'application');
     apps.forEach(app => {
         const queue = [app['bom-ref']];
@@ -732,15 +803,57 @@ async function processSbom(workspace) {
                 const child = cMap.get(ref);
                 if (child) {
                     if (child.type !== 'application') {
-                        const info = cache[`${child.name.toLowerCase()}_${child.version}`];
+                        const rawName = child.name.toLowerCase().trim();
+                        const version = String(child.version).trim();
+                        
+                        // C'est ici qu'on détermine la "Famille" (Slug)
+                        const slug = getEolSlug(rawName) || rawName;
+                        const groupKey = `${slug}|${version}`;
+                        
+                        // On récupère les infos calculées avec le vrai nom
+                        const info = cache[`${rawName}_${version}`];
+                        
                         if (info) {
-                            const k = `${child.name.toLowerCase()}|${child.version}`;
-                            if (!window.lastProcessedVulns.has(k)) {
-                                window.lastProcessedVulns.set(k, { ...child, ...info, impacted: [] });
+                            if (!window.lastProcessedVulns.has(groupKey)) {
+                                // On initialise le conteneur de famille
+                                window.lastProcessedVulns.set(groupKey, { 
+                                    ...child, 
+                                    name: slug, 
+                                    version: version, 
+                                    p: info.p,
+                                    currentEol: info.currentEol,
+                                    supportedCycles: info.supportedCycles,
+                                    sourceLink: info.sourceLink,
+                                    cves: [],
+                                    impacted: [], 
+                                    subComponents: new Set() 
+                                });
                             }
-                            const vulnItem = window.lastProcessedVulns.get(k);
-                            if (!vulnItem.impacted.includes(app.name)) {
-                                vulnItem.impacted.push(app.name);
+                            
+                            const vulnGroup = window.lastProcessedVulns.get(groupKey);
+                            
+                            // On ajoute l'application impactée
+                            if (!vulnGroup.impacted.includes(app.name)) {
+                                vulnGroup.impacted.push(app.name);
+                            }
+                            
+                            // On ajoute le module original dans le "sac" de la famille
+                            vulnGroup.subComponents.add(child.name);
+
+                            // Fusion des CVE (sans créer de doublons)
+                            if (info.cves && info.cves.length > 0) {
+                                info.cves.forEach(newCve => {
+                                    if (!vulnGroup.cves.some(existing => existing.id === newCve.id)) {
+                                        vulnGroup.cves.push(newCve);
+                                    }
+                                });
+                            }
+
+                            // Si le groupe a des failles, la priorité monte automatiquement à P0
+                            if (vulnGroup.cves.length > 0) {
+                                vulnGroup.p = 0;
+                            } else if (info.p < vulnGroup.p) {
+                                vulnGroup.p = info.p; // On garde la priorité la plus stricte
                             }
                         }
                     }
@@ -750,31 +863,26 @@ async function processSbom(workspace) {
         }
     });
 
+    // 4. GÉNÉRATION DU HTML
     let pStats = [0, 0, 0, 0, 0];
     const sortedVulns = Array.from(window.lastProcessedVulns.values()).sort((a, b) => a.p - b.p);
 
     const html = sortedVulns.map(v => {
         pStats[v.p]++;
         
-        // RESTAURATION: On réintègre la génération JSON pour optionsHtml
-        // VÉRIFICATION DE LA RÈGLE LOCALE (VERSION CIBLE MANUELLE)
         const slug = getEolSlug(v.name.toLowerCase());
-        const localRule = customEolDb[slug] ? customEolDb[slug][0] : null;
-        
+        const localRule = customEolDb[slug] || null;
+
         let colLongHtml = ""; 
         let colSupportHtml = ""; 
 
         if (localRule && localRule.targetVersion) {
-            // SCÉNARIO 1 : L'utilisateur a forcé une version cible manuellement
             colLongHtml = `<span style="color:var(--accent-blue); font-weight:bold; font-size:12px; padding:5px 8px; border:1px dashed var(--accent-blue); border-radius:4px; display:inline-block; text-align:center; min-width:80px;">v${escapeHTML(localRule.targetVersion)}</span>`;
-            
-            // On récupère le statut global de la règle locale pour le lien de support
             const supportPhase = evaluateSupportPhase(localRule, true);
             const linkHref = localRule.link ? `href="${escapeHTML(localRule.link)}" target="_blank" onclick="event.stopPropagation();"` : `onclick="event.stopPropagation();" style="cursor:default;"`;
             colSupportHtml = `<a ${linkHref} style="color:${escapeHTML(supportPhase.color)}; text-decoration:none; display:flex; align-items:center; gap:5px;" title="Source de vérité interne">🔗 ${escapeHTML(supportPhase.text)}</a>`;
         } 
         else {
-            // SCÉNARIO 2 : COMPORTEMENT API CLASSIQUE (Menu déroulant)
             let optionsHtml = "<option value='{}'>Aucune cible disponible</option>";
             let initialSupportLink = "<span style='color:var(--text-muted)'>Aucune Cible</span>";
 
@@ -796,36 +904,64 @@ async function processSbom(workspace) {
             colSupportHtml = initialSupportLink;
         }
 
-        // --- GÉNÉRATION DES BADGES ET BOUTONS ---
         const cveBtn = (v.cves && v.cves.length > 0) ? `<button class="cve-badge" onclick="openCVE(event, '${escapeHTML(v.name)}', '${escapeHTML(v.version)}')">🚨 ${v.cves.length} Faille(s)</button>` : '';
         const delBtn = (v['bom-ref'] && v['bom-ref'].startsWith('manual-')) 
-            ? `<button class="cve-badge" style="background:rgba(255,68,68,0.1); border-color:var(--p0); color:var(--p0);" onclick="deleteManualComponent(event, '${escapeHTML(v['bom-ref'])}')">🗑️</button>` : '';
+            ? `<button class="cve-badge" style="background:rgba(255,68,68,0.1); border-color:var(--p0); color:var(--p0);" title="Supprimer ce composant manuel" onclick="deleteComponent(event, '${escapeHTML(v['bom-ref'])}')">🗑️</button>` 
+            : '';
 
         let searchKeywords = `${v.name.toLowerCase()} ${v.version}`;
         if (v.cves && v.cves.length > 0) {
             searchKeywords += " " + v.cves.map(c => c.id.toLowerCase()).join(" ");
         }
 
-        // --- RETOUR DU HTML FINAL ---
+        // --- NOUVEAU : TYPE DU COMPOSANT ---
+        const typeLabel = typeof translateType === 'function' ? translateType(v.type) : (v.type || 'Librairie');
+        const colTypeHtml = `<span class="badge-type">${escapeHTML(typeLabel)}</span>`;
+
+        // --- SOUS-COMPOSANTS (MODULES) ---
+        const subCompsArray = Array.from(v.subComponents || []);
+        let subCompsHtml = "";
+        
+        if (subCompsArray.length > 0) {
+            subCompsHtml = `
+            <div style="width: 100%; padding-top: 12px; margin-top: 12px; border-top: 1px dashed var(--border-color);">
+                <strong style="color:var(--text-muted); font-size: 10px; text-transform: uppercase;">📦 Modules rattachés de l'inventaire source :</strong><br>
+                <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
+                    ${subCompsArray.map(n => `<span style="background:rgba(255,255,255,0.03); padding:4px 8px; border-radius:4px; font-size:11px; color:var(--text-main); border:1px solid var(--border-color);">${escapeHTML(n)}</span>`).join('')}
+                </div>
+            </div>`;
+            
+            v.compTitle = `Regroupement : ${subCompsArray.join(', ')}`;
+        } else {
+            v.compTitle = v.name;
+        }
+
         return `
         <details data-search="${escapeHTML(searchKeywords)}">
             <summary>
                 <div class="col-prio"><span class="badge" style="background:var(--p${v.p})">P${v.p}</span></div>
-                <div class="col-comp" title="${escapeHTML(v.name)}">${escapeHTML(v.name)} <small>v${escapeHTML(v.version)}</small> ${cveBtn} ${delBtn}</div>
-                <div class="col-eol" style="color:var(--p${v.p})">${escapeHTML(v.currentEol)}</div>
+                <div class="col-comp" title="${escapeHTML(v.compTitle)}">${escapeHTML(v.name)} <small>v${escapeHTML(v.version)}</small> ${cveBtn} ${delBtn}</div>
                 
-                <!-- Injection dynamique (Select ou Tag manuel) -->
+                <div class="col-type">${colTypeHtml}</div> <div class="col-eol" style="color:var(--p${v.p})">${escapeHTML(v.currentEol)}</div>
                 <div class="col-long">${colLongHtml}</div>
                 <div class="col-support">${colSupportHtml}</div>
-                
                 <div class="col-impact">${v.impacted.length} Apps ⏷</div>
             </summary>
-            <div class="content">${v.impacted.map(n => `<span class="parent-tag">${escapeHTML(n)}</span>`).join('')}</div>
+            
+            <div class="content" style="display:flex; flex-direction:column; align-items:flex-start;">
+                <div style="width: 100%;">
+                    <strong style="color:var(--text-muted); font-size: 10px; text-transform: uppercase;">🏢 Applications impactées :</strong><br>
+                    <div style="margin-top:6px;">
+                        ${v.impacted.map(n => `<span class="parent-tag">${escapeHTML(n)}</span>`).join('')}
+                    </div>
+                </div>
+                ${subCompsHtml}
+            </div>
         </details>`;
     }).join('');
 
     if ($('results')) {
-        $('results').innerHTML = html || "<p style='text-align:center; padding:30px; color:var(--text-muted);'>Aucun composant parent vulnérable trouvé.</p>";
+        $('results').innerHTML = html || "<p style='text-align:center; padding:30px; color:var(--text-muted);'>Aucun composant externe vulnérable trouvé.</p>";
     }
     
     for (let i = 0; i < 5; i++) { 
@@ -889,6 +1025,41 @@ function renderHistoryUI() {
         </div>`).join('');
 }
 
+/**
+ * Adaptateur Universel : Convertit SPDX ou CycloneDX en une liste standardisée
+ * @param {Object} rawJson - Le JSON brut issu du fichier
+ * @returns {Array} Liste des composants {name, version, type}
+ */
+function normalizeSbomData(rawJson) {
+    let normalizedList = [];
+
+    // 1. Détection du format CycloneDX
+    if (rawJson.bomFormat === "CycloneDX" || rawJson.components) {
+        console.log("[OSBOM] Format CycloneDX détecté.");
+        normalizedList = rawJson.components.map(c => ({
+            name: c.name,
+            version: c.version,
+            type: c.type || 'library' // Permet de séparer l'application principale des dépendances
+        }));
+    }
+    // 2. Détection du format SPDX
+    else if (rawJson.spdxVersion || rawJson.packages) {
+        console.log(`[OSBOM] Format SPDX détecté (${rawJson.spdxVersion || 'Version Inconnue'}).`);
+        normalizedList = rawJson.packages.map(p => ({
+            name: p.name,
+            version: p.versionInfo, // SPDX utilise 'versionInfo' au lieu de 'version'
+            type: 'library' // SPDX gère les relations différemment, on considère tout comme des librairies par défaut
+        }));
+    }
+    // 3. Format non reconnu
+    else {
+        throw new Error("Format SBOM non reconnu. Veuillez fournir un fichier JSON CycloneDX ou SPDX valide.");
+    }
+
+    // Nettoyage de sécurité : on supprime les entrées vides ou sans version (souvent des métadonnées légales)
+    return normalizedList.filter(c => c.name && c.version);
+}
+
 function deleteHistoryFile(id) {
     if(!confirm("Voulez-vous vraiment supprimer cet import ? Ses composants seront retirés du tableau de bord.")) return;
 
@@ -923,15 +1094,60 @@ function replaceHistory(id) {
     processSbom(activeWorkspace);
 }
 
+// ============================================================================
+// IMPORT DE FICHIERS (AVEC ADAPTATEUR SPDX -> CYCLONEDX)
+// ============================================================================
 const fileIn = $('fileIn');
 if (fileIn) {
     fileIn.addEventListener('change', async e => {
         for(let f of e.target.files) {
-            const data = JSON.parse(await f.text()); const nid = saveToHistory(f.name, data);
-            if(data.components) { data.components.forEach(c => c._sourceId = nid); activeWorkspace.components.push(...data.components); }
-            if(data.dependencies) { data.dependencies.forEach(d => d._sourceId = nid); activeWorkspace.dependencies.push(...data.dependencies); }
+            try {
+                let data = JSON.parse(await f.text()); 
+                
+                // --- 🔄 ADAPTATEUR SPDX VERS CYCLONEDX ---
+                if (data.spdxVersion || data.packages) {
+                    console.log("[Titan] Format SPDX détecté, conversion à la volée...");
+                    
+                    // 1. On extrait les packages SPDX
+                    const spdxComps = (data.packages || []).map(p => ({
+                        "bom-ref": p.SPDXID || p.name,
+                        name: p.name,
+                        version: p.versionInfo || "0.0.0",
+                        type: "library"
+                    }));
+                    
+                    // 2. Titan a besoin d'une "application" racine pour afficher le tableau proprement
+                    const rootId = "SPDX-ROOT-" + Date.now();
+                    const appName = f.name.replace('.json', ''); // On nomme l'application d'après le nom du fichier
+                    spdxComps.push({ "bom-ref": rootId, name: appName, version: "1.0", type: "application" });
+                    
+                    // 3. On relie tous les composants à cette application racine
+                    data.components = spdxComps;
+                    data.dependencies = [{ 
+                        ref: rootId, 
+                        dependsOn: spdxComps.filter(c => c.type !== 'application').map(c => c['bom-ref']) 
+                    }];
+                }
+                // ------------------------------------------
+
+                const nid = saveToHistory(f.name, data);
+                if(data.components) { 
+                    data.components.forEach(c => c._sourceId = nid); 
+                    activeWorkspace.components.push(...data.components); 
+                }
+                if(data.dependencies) { 
+                    data.dependencies.forEach(d => d._sourceId = nid); 
+                    activeWorkspace.dependencies.push(...data.dependencies); 
+                }
+            } catch (err) {
+                console.error("[Titan] Erreur d'import", err);
+                alert("Erreur lors de la lecture ou du formatage du fichier : " + f.name);
+            }
         }
-        localStorage.setItem(`${currentProfileId}_activeWorkspace`, JSON.stringify(activeWorkspace)); processSbom(activeWorkspace); e.target.value = '';
+        
+        localStorage.setItem(`${currentProfileId}_activeWorkspace`, JSON.stringify(activeWorkspace)); 
+        processSbom(activeWorkspace); 
+        e.target.value = '';
     });
 }
 
@@ -971,11 +1187,31 @@ function exportToCSV() {
 
 function closeModal(id) { $(id).style.display = 'none'; }
 
-function openCVE(e, n, v) {
-    e.stopPropagation(); const d = cache[`${n.toLowerCase()}_${v}`]; if(!d||!d.cves) return;
-    currentCVEs = d.cves; $('modalCompName').innerText = `${n} (v${v})`; $('cveSearch').value = '';
-    renderCVEs(currentCVEs); $('cveModal').style.display = 'flex';
-}
+window.openCVE = function(event, name, version) {
+    event.stopPropagation(); // Empêche l'accordéon de s'ouvrir quand on clique sur le bouton
+    
+    // On recrée la clé exacte utilisée par notre super-regroupement
+    const k = `${name.toLowerCase()}|${version}`;
+    const vulnData = window.lastProcessedVulns.get(k);
+    
+    if (!vulnData || !vulnData.cves || vulnData.cves.length === 0) {
+        console.warn("Aucune faille trouvée en mémoire pour :", k);
+        return;
+    }
+    
+    currentCVEs = vulnData.cves; 
+    
+    const modalTitle = document.getElementById('modalCompName');
+    if (modalTitle) modalTitle.innerText = `${name} (v${version})`; 
+    
+    const searchInput = document.getElementById('cveSearch');
+    if (searchInput) searchInput.value = '';
+    
+    renderCVEs(currentCVEs); 
+    
+    const modal = document.getElementById('cveModal');
+    if (modal) modal.style.display = 'flex';
+};
 
 function filterCVEs() { 
     const q = $('cveSearch').value.toLowerCase(); 
